@@ -19,50 +19,50 @@ go get github.com/felipedenardo/chameleon-common
 
 ## Como Usar
 
-### 1. Respostas Padronizadas
-
-Use este pacote nos seus Handlers (Controllers) para garantir que todas as APIs retornem o mesmo formato JSON.
-
-```go
-import "github.com/felipedenardo/chameleon-common/pkg/http"
-// Atalhos (Recomendado)
-// Usam mensagens padrão como "success", "created successfully", etc.
-c.JSON(200, response.NewOk(data))
-c.JSON(200, response.NewPaged(lista, page, perPage, total))
-c.JSON(200, response.NewDeleted())
-c.JSON(200, response.NewUpdated(data))
-c.JSON(201, response.NewCreated(data))
-c.JSON(400, response.NewValidationErr(errors))
-c.JSON(404, response.NewNotFound())
-c.JSON(500, response.NewError(response.MsgInternalErr))
-c.JSON(500, response.NewInternalErr())
-
-// Customizados
-// Use quando precisar de uma mensagem de negócio específica.
-c.JSON(200, response.NewSuccess("Custom message 1", token))
-c.JSON(400, response.NewFail("Custom message 2", nil))
-c.JSON(500, response.NewError("Custom message 3"))
-```
-
-#### 2. Helpers de API (pkg/http_api)
-Este pacote atua como uma camada de cola (infraestrutura) que lida com o Gin/Validator. Use-o para evitar escrever a lógica de conversão de erros em todos os seus Handlers.
+### 1. Interface HTTP 
+Este pacote encapsula todas as chamadas `c.JSON()` e a lógica de tradução de erros para garantir que seus Handlers fiquem limpos.
 
 ```go
-import "https://github.com/felipedenardo/chameleon-common/pkg/http"
+import (
+    httphelpers "github.com/felipedenardo/chameleon-common/pkg/http"
+    "github.com/felipedenardo/chameleon-common/pkg/response"
+)
 
 func RegisterUser(c *gin.Context) {
     var req RegisterRequest
-
+    
     if err := c.ShouldBindJSON(&req); err != nil {
-        http_api.HandleBindingError(c, err)
+        httphelpers.HandleBindingError(c, err) 
         return
     }
 
+    user, err := service.Register(...)
+
+    if err != nil {
+        if errors.Is(err, service.ErrEmailExists) {
+            httphelpers.RespondDomainFail(c, err.Error()) 
+            return
+        }
+        httphelpers.HandleInternalError(c, err) 
+        return
+    }
+
+    httphelpers.RespondCreated(c, user) 
+}
+
+func GetProfile(c *gin.Context) {
     userID := c.Param("id")
     if userID == "" {
-        http_api.HandleParamError(c, "id", "Invalid user id")
+        httphelpers.HandleParamError(c, "id", "ID is required") 
         return
     }
+
+    if profile == nil {
+        httphelpers.RespondNotFound(c)
+        return
+    }
+    
+    httphelpers.RespondPaged(c, lista, page, perPage, total)
 }
 ```
 
