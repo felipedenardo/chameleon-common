@@ -24,7 +24,7 @@ go get github.com/felipedenardo/chameleon-common
 Use este pacote nos seus Handlers (Controllers) para garantir que todas as APIs retornem o mesmo formato JSON.
 
 ```go
-import "github.com/felipedenardo/chameleon-common/pkg/http_api"
+import "github.com/felipedenardo/chameleon-common/pkg/http"
 // Atalhos (Recomendado)
 // Usam mensagens padrão como "success", "created successfully", etc.
 c.JSON(200, response.NewOk(data))
@@ -48,7 +48,7 @@ c.JSON(500, response.NewError("Custom message 3"))
 Este pacote atua como uma camada de cola (infraestrutura) que lida com o Gin/Validator. Use-o para evitar escrever a lógica de conversão de erros em todos os seus Handlers.
 
 ```go
-import "https://github.com/felipedenardo/chameleon-common/pkg/http_api"
+import "https://github.com/felipedenardo/chameleon-common/pkg/http"
 
 func RegisterUser(c *gin.Context) {
     var req RegisterRequest

@@ -1,4 +1,4 @@
-package http_api
+package http
 
 import (
 	"errors"
@@ -53,21 +53,25 @@ func HandleInternalError(c *gin.Context, err error) {
 
 func HandleBindingError(c *gin.Context, err error) {
 	var ve validator.ValidationErrors
+
 	if errors.As(err, &ve) {
 		fieldErrors := validation.FromValidationErrors(ve)
-		c.JSON(http.StatusBadRequest, response.NewFailCustom(response.MsgValidationErr, fieldErrors))
+		RespondValidation(c, fieldErrors)
 		return
 	}
 
-	c.JSON(http.StatusBadRequest, response.NewFailCustom(response.MsgInvalidJSON, []response.FieldError{{
-		Field: "body",
-		Error: err.Error(),
-	}}))
+	c.JSON(http.StatusBadRequest, response.NewFailCustom(response.MsgInvalidJSON,
+		[]response.FieldError{
+			response.NewFieldError("body", err.Error()),
+		},
+	))
 }
 
 func HandleParamError(c *gin.Context, field, message string) {
 	c.JSON(http.StatusBadRequest, response.NewFailCustom(
 		response.MsgParamErr,
-		[]response.FieldError{{Field: field, Error: message}},
+		[]response.FieldError{
+			response.NewFieldError(field, message),
+		},
 	))
 }
