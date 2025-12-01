@@ -46,7 +46,7 @@ func GetProfile(c *gin.Context) {
 	httphelpers.RespondNotFound(c)
 	
 	// Retorna 500
-	httphelpers.HandleInternalError(c, err)
+	httphelpers.RespondInternalError(c, err)
 }
 ```
 
