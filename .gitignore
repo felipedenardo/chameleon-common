@@ -1,4 +1,4 @@
-# --- IDEs e Editores ---
+# --- IDEs e Editors ---
 .idea/
 .vscode/
 *.iml
@@ -11,5 +11,4 @@
 *.test
 *.out
 
-# --- Dependências (se usar vendor) ---
-vendor/
+
