@@ -19,62 +19,45 @@ go get github.com/felipedenardo/chameleon-common
 
 ## Como Usar
 
-### 1. Interface HTTP 
-Este pacote encapsula todas as chamadas `c.JSON()` e a lógica de tradução de erros para garantir que seus Handlers fiquem limpos.
+### 1. Padronização de Respostas (pkg/response)
+A biblioteca fornece Atalhos (mensagens automáticas) e métodos Customizados (mensagens manuais).
 
 ```go
-import (
-    httphelpers "github.com/felipedenardo/chameleon-common/pkg/http"
-    "github.com/felipedenardo/chameleon-common/pkg/response"
-)
+import "github.com/felipedenardo/chameleon-common/pkg/response"
 
-func RegisterUser(c *gin.Context) {
-    var req RegisterRequest
-    
-    if err := c.ShouldBindJSON(&req); err != nil {
-        httphelpers.HandleBindingError(c, err) 
-        return
-    }
-
-    user, err := service.Register(...)
-
-    if err != nil {
-        if errors.Is(err, service.ErrEmailExists) {
-            httphelpers.RespondDomainFail(c, err.Error()) 
-            return
-        }
-        httphelpers.HandleInternalError(c, err) 
-        return
-    }
-
-    httphelpers.RespondCreated(c, user) 
+func MyHandler(c *gin.Context) {
+    c.JSON(201, response.NewCreated(data))
+    c.JSON(200, response.NewOk(data))
+     	
+    c.JSON(200, response.NewSuccessCustom("Login realizado com sucesso", token))
+    c.JSON(400, response.NewFailCustom("Saldo insuficiente para transação", nil))
 }
+```
+
+### 2. Interface HTTP (pkg/http)
+
+Este pacote encapsula todas as chamadas c.JSON() e a lógica de tradução de erros. É o ponto de saída final da sua API.
+
+```go
+import httphelpers "github.com/felipedenardo/chameleon-common/pkg/http"
 
 func GetProfile(c *gin.Context) {
-    userID := c.Param("id")
-    if userID == "" {
-        httphelpers.HandleParamError(c, "id", "ID is required") 
-        return
-    }
-
-    if profile == nil {
-        httphelpers.RespondNotFound(c)
-        return
-    }
-    
-    httphelpers.RespondPaged(c, lista, page, perPage, total)
+	// Retorna 404
+	httphelpers.RespondNotFound(c)
+	
+	// Retorna 500
+	httphelpers.HandleInternalError(c, err)
 }
 ```
 
 ### 3. Validação Automática
 
-Wrapper que traduz erros técnicos do `go-playground/validator` para o formato `response.FieldError`, amigável para o Frontend.  
-Ele lê as tags JSON para nomear os campos corretamente.
+Wrapper que traduz erros técnicos do go-playground/validator para o formato response.FieldError, amigável para o Frontend.
 
 ```go
 import (
-"github.com/felipedenardo/chameleon-common/pkg/validation"
-"github.com/felipedenardo/chameleon-common/pkg/response"
+    "github.com/felipedenardo/chameleon-common/pkg/validation"
+    httphelpers "github.com/felipedenardo/chameleon-common/pkg/http"
 )
 
 type LoginRequest struct {
@@ -82,15 +65,16 @@ type LoginRequest struct {
     Password string `json:"password" validate:"required,min=6"`
 }
 
-if errs := validation.ValidateRequest(req); errs != nil {
-    c.JSON(400, response.NewFail("Erro de validação", errs))
+func Login(c *gin.Context) {
+    var req LoginRequest
+    if errs := validation.ValidateRequest(req); errs != nil {
+    httphelpers.RespondValidation(c, errs)
+        return
+    }
 }
 ```
 
 ### 4. Base Model com UUID
-
-Struct base para entidades GORM.  
-Já vem configurada com **UUID v4 como Primary Key**, timestamps automáticos e helper para **DTO limpo** (sem campos internos do GORM).
 
 ```go
 import "github.com/felipedenardo/chameleon-common/pkg/base"
@@ -99,21 +83,13 @@ type Professional struct {
     base.Model
     Name string `json:"name"`
 }
-
-func ToResponse(p *Professional) MyResponse {
-    return MyResponse{
-            ModelDTO: base.ToDTO(p.Model),
-            Name:     p.Name,
-    }
-}
+// ...
 ```
 
 ### Versionamento
 
-Este projeto utiliza **SemVer (Semantic Versioning)**. 
+Este projeto utiliza **SemVer (Semantic Versioning)**.
 As releases são controladas por **Git Tags**.
 
 - **v0.x.x** — Desenvolvimento
 - **v1.0.0** — Estável
-
-
