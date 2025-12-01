@@ -46,12 +46,12 @@ func RespondDomainFail(c *gin.Context, message string) {
 	c.JSON(http.StatusBadRequest, response.NewFailCustom(message, nil))
 }
 
-func HandleInternalError(c *gin.Context, err error) {
+func RespondInternalError(c *gin.Context, err error) {
 	log.Printf("[SERVER ERROR] Unhandled error: %v", err)
 	c.JSON(http.StatusInternalServerError, response.NewInternalErr())
 }
 
-func HandleBindingError(c *gin.Context, err error) {
+func RespondBindingError(c *gin.Context, err error) {
 	var ve validator.ValidationErrors
 
 	if errors.As(err, &ve) {
@@ -67,7 +67,7 @@ func HandleBindingError(c *gin.Context, err error) {
 	))
 }
 
-func HandleParamError(c *gin.Context, field, message string) {
+func RespondParamError(c *gin.Context, field, message string) {
 	c.JSON(http.StatusBadRequest, response.NewFailCustom(
 		response.MsgParamErr,
 		[]response.FieldError{
