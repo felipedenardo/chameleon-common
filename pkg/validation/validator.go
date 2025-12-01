@@ -30,7 +30,7 @@ func ValidateRequest(s interface{}) []response.FieldError {
 
 	var ve validator.ValidationErrors
 	if errors.As(err, &ve) && len(ve) > 0 {
-		return fromValidationErrors(ve)
+		return FromValidationErrors(ve)
 	}
 
 	return []response.FieldError{{
@@ -39,7 +39,7 @@ func ValidateRequest(s interface{}) []response.FieldError {
 	}}
 }
 
-func fromValidationErrors(ve validator.ValidationErrors) []response.FieldError {
+func FromValidationErrors(ve validator.ValidationErrors) []response.FieldError {
 	var errs []response.FieldError
 	for _, err := range ve {
 		errs = append(errs, response.FieldError{

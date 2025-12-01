@@ -7,7 +7,29 @@ func NewFieldError(field, message string) FieldError {
 	}
 }
 
-func NewFail(message string, fieldErrors []FieldError) Standard {
+func NewValidationErr(fieldErrors []FieldError) Standard {
+	return Standard{
+		Status:      "fail",
+		Message:     MsgValidationErr,
+		FieldErrors: fieldErrors,
+	}
+}
+
+func NewInternalErr() Standard {
+	return Standard{
+		Status:  "error",
+		Message: MsgInternalErr,
+	}
+}
+
+func NewNotFound() Standard {
+	return Standard{
+		Status:  "error",
+		Message: MsgNotFound,
+	}
+}
+
+func NewFailCustom(message string, fieldErrors []FieldError) Standard {
 	return Standard{
 		Status:      "fail",
 		Message:     message,
@@ -15,14 +37,7 @@ func NewFail(message string, fieldErrors []FieldError) Standard {
 	}
 }
 
-func NewError(message string) Standard {
-	return Standard{
-		Status:  "error",
-		Message: message,
-	}
-}
-
-func NewNotFound(message string) Standard {
+func NewErrorCustom(message string) Standard {
 	return Standard{
 		Status:  "error",
 		Message: message,
