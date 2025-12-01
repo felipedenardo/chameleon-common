@@ -1,0 +1,15 @@
+# --- IDEs e Editores ---
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# --- Go Build ---
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# --- Dependências (se usar vendor) ---
+vendor/
