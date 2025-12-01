@@ -68,7 +68,7 @@ type LoginRequest struct {
 func Login(c *gin.Context) {
     var req LoginRequest
     if errs := validation.ValidateRequest(req); errs != nil {
-    httphelpers.RespondValidation(c, errs)
+        httphelpers.RespondValidation(c, errs)
         return
     }
 }
