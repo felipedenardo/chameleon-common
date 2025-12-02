@@ -3,6 +3,7 @@
 Biblioteca de utilitários compartilhados (**Shared Kernel**) para o ecossistema de microsserviços Chameleon (Auth, CRM, Agent).
 
 O objetivo desta biblioteca é padronizar:
+- **Segurança e Acesso** (Middleware JWT)
 - **Respostas da API** (Padrão JSEND)
 - **Validação de Dados** (Wrapper do Validator v10)
 - **Modelos de Banco** (UUID v4 & Soft Delete)
@@ -19,40 +20,54 @@ go get github.com/felipedenardo/chameleon-common
 
 ## Como Usar
 
-### 1. Padronização de Respostas (pkg/response)
-A biblioteca fornece Atalhos (mensagens automáticas) e métodos Customizados (mensagens manuais).
-
-```go
-import "github.com/felipedenardo/chameleon-common/pkg/response"
-
-func MyHandler(c *gin.Context) {
-    c.JSON(201, response.NewCreated(data))
-    c.JSON(200, response.NewOk(data))
-     	
-    c.JSON(200, response.NewSuccessCustom("Login realizado com sucesso", token))
-    c.JSON(400, response.NewFailCustom("Saldo insuficiente para transação", nil))
-}
-```
-
-### 2. Interface HTTP (pkg/http)
-
+### 1. Interface HTTP (pkg/http)
 Este pacote encapsula todas as chamadas c.JSON() e a lógica de tradução de erros. É o ponto de saída final da sua API.
 
 ```go
 import httphelpers "github.com/felipedenardo/chameleon-common/pkg/http"
 
 func GetProfile(c *gin.Context) {
-	// Retorna 404
-	httphelpers.RespondNotFound(c)
-	
-	// Retorna 500
-	httphelpers.RespondInternalError(c, err)
+    // Retorna 404
+    httphelpers.RespondNotFound(c)
+    
+    // Retorna 500
+    httphelpers.HandleInternalError(c, err)
+    
+    // Sucesso 201
+    httphelpers.RespondCreated(c, data)
 }
 ```
 
-### 3. Validação Automática
+### 2. Autenticação e Autorização (pkg/middleware)
+O Middleware verifica o Token JWT emitido pelo auth-api e injeta userID e role no contexto do Gin.
 
-Wrapper que traduz erros técnicos do go-playground/validator para o formato response.FieldError, amigável para o Frontend.
+```go
+import "github.com/felipedenardo/chameleon-common/pkg/middleware"
+
+func SetupProtectedRoutes(r *gin.Engine, cfg *Config) {
+    authMiddleware := middleware.AuthMiddleware(cfg.JWTSecret)
+    protectedRoutes := r.Group("/api/v1/profiles").Use(authMiddleware)
+    {
+        protectedRoutes.GET("/me", userHandler.GetProfile) 
+    }
+}
+```
+
+### 3. Padronização de Respostas (pkg/response)
+A biblioteca fornece Atalhos (mensagens automáticas) e métodos Customizados.
+
+```go
+import "github.com/felipedenardo/chameleon-common/pkg/response"
+
+func MyHandler(c *gin.Context) {
+    c.JSON(201, response.NewCreated(data))
+    c.JSON(200, response.NewPaged(lista, page, perPage, total))
+    c.JSON(400, response.NewFailCustom("Resposta customizada", nil))
+}
+```
+
+### 4. Validação Automática
+Wrapper que traduz erros técnicos do go-playground/validator para o formato response.FieldError
 
 ```go
 import (
@@ -60,13 +75,7 @@ import (
     httphelpers "github.com/felipedenardo/chameleon-common/pkg/http"
 )
 
-type LoginRequest struct {
-    Email    string `json:"email" validate:"required,email"`
-    Password string `json:"password" validate:"required,min=6"`
-}
-
 func Login(c *gin.Context) {
-    var req LoginRequest
     if errs := validation.ValidateRequest(req); errs != nil {
         httphelpers.RespondValidation(c, errs)
         return
@@ -74,7 +83,7 @@ func Login(c *gin.Context) {
 }
 ```
 
-### 4. Base Model com UUID
+### 5. Base Model com UUID
 
 ```go
 import "github.com/felipedenardo/chameleon-common/pkg/base"
