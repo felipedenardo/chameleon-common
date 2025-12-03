@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const RawTokenKey = "rawTokenString"
+
 func AuthMiddleware(secretKey string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 
@@ -25,6 +27,8 @@ func AuthMiddleware(secretKey string) gin.HandlerFunc {
 			}
 			return []byte(secretKey), nil
 		})
+
+		c.Set(RawTokenKey, tokenString)
 
 		if err != nil || !token.Valid {
 			httphelpers.RespondUnauthorized(c, "Invalid or expired token")
