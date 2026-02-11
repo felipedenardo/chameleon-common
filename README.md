@@ -39,19 +39,28 @@ func GetProfile(c *gin.Context) {
 ```
 
 ### 2. Autenticação e Autorização (pkg/middleware)
-O Middleware verifica o Token JWT emitido pelo auth-api e injeta userID e role no contexto do Gin.
+O Middleware verifica o Token JWT emitido pelo auth-api e injeta userID e role no contexto do Gin. Agora com suporte nativo a **Blacklist** e **Token Versioning**.
 
 ```go
-import "github.com/felipedenardo/chameleon-common/pkg/middleware"
+import (
+    "github.com/felipedenardo/chameleon-common/pkg/middleware"
+    "github.com/felipedenardo/chameleon-common/pkg/security"
+)
 
-func SetupProtectedRoutes(r *gin.Engine, cfg *Config) {
-    authMiddleware := middleware.AuthMiddleware(cfg.JWTSecret)
+func SetupProtectedRoutes(r *gin.Engine, cfg *Config, blacklist security.BlacklistTokenChecker, versioning security.TokenVersionChecker) {
+    // Agora o middleware exige checkers de segurança
+    authMiddleware := middleware.AuthMiddleware(cfg.JWTSecret, blacklist, versioning)
+    
     protectedRoutes := r.Group("/api/v1/profiles").Use(authMiddleware)
     {
         protectedRoutes.GET("/me", userHandler.GetProfile) 
     }
 }
 ```
+
+#### Segurança Adicional
+- **Blacklist Check:** Verifica se o `jti` do token foi revogado (Logout).
+- **Token Versioning:** Valida se a versão do token (`token_version` claim) é inferior à versão atual do usuário no banco/cache (Global Logout).
 
 ### 3. Padronização de Respostas (pkg/response)
 A biblioteca fornece Atalhos (mensagens automáticas) e métodos Customizados.
