@@ -62,12 +62,22 @@ func validationErrorMessage(fe validator.FieldError) string {
 		return "must be at most " + fe.Param() + " characters long"
 	case "len":
 		return "must be exactly " + fe.Param() + " characters long"
+	case "eqfield":
+		return "does not match " + strings.ToLower(fe.Param())
 	case "oneof":
 		return "must be one of: " + strings.ReplaceAll(fe.Param(), " ", ", ")
 	case "uuid":
 		return "must be a valid UUID"
 	case "url":
 		return "must be a valid URL"
+	case "numeric":
+		return "must be a numeric value"
+	case "alphanum":
+		return "must contain only letters and numbers"
+	case "gte":
+		return "must be greater than or equal to " + fe.Param()
+	case "lte":
+		return "must be less than or equal to " + fe.Param()
 	default:
 		return "is invalid"
 	}
