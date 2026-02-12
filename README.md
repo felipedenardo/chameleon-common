@@ -1,45 +1,85 @@
 # 🦎 Chameleon Common Lib
 
+[![Go Version](https://img.shields.io/github/go-mod/go-version/felipedenardo/chameleon-common)](https://golang.org/)
+
 Biblioteca de utilitários compartilhados (**Shared Kernel**) para o ecossistema de microsserviços Chameleon (Auth, CRM, Agent).
 
+## 📖 Sumário
+
+- [Visão Geral](#-visão-geral)
+- [Estrutura do Projeto](#-estrutura-do-projeto)
+- [📦 Instalação](#-instalação)
+- [Como Usar](#-como-usar)
+    - [1. Interface HTTP (`pkg/http`)](#1-interface-http-pkghtp)
+    - [2. Autenticação (`pkg/middleware`)](#2-autenticação-e-autorização-pkgmiddleware)
+    - [3. Respostas da API (`pkg/response`)](#3-padronização-de-respostas-pkgresponse)
+    - [4. Validação (`pkg/validation`)](#4-validação-automática)
+    - [5. Modelos de Base (`pkg/base`)](#5-base-model-com-uuid)
+- [Versionamento](#-versionamento)
+
+---
+
+## 🎯 Visão Geral
+
 O objetivo desta biblioteca é padronizar:
-- **Segurança e Acesso** (Middleware JWT)
-- **Respostas da API** (Padrão JSEND)
-- **Validação de Dados** (Wrapper do Validator v10)
-- **Modelos de Banco** (UUID v4 & Soft Delete)
+- **Segurança e Acesso**: Middleware JWT com suporte a Blacklist e Versionamento.
+- **Respostas da API**: Padronização baseada no formato JSEND.
+- **Validação de Dados**: Wrapper amigável para o `validator v10`.
+- **Modelos de Banco**: Implementação de UUID v4 & Soft Delete nativos.
+
+## 📂 Estrutura do Projeto
+
+```text
+pkg/
+├── base/        # Modelos base e DTOs (GORM, UUID)
+├── http/        # Helpers para o framework Gin (Respostas rápidas)
+├── middleware/  # Middlewares de segurança (JWT)
+├── response/    # Estruturas JSEND e mensagens padrão
+├── security/    # Interfaces de Blacklist e Validadores de Versão
+└── validation/  # Lógica de validação e tradução de erros
+```
 
 ---
 
 ## 📦 Instalação
 
-No seu microserviço (ex: `auth-api`), execute:
+No seu microserviço, execute:
 
 ```bash
 go get github.com/felipedenardo/chameleon-common
 ```
 
-## Como Usar
+---
 
-### 1. Interface HTTP (pkg/http)
-Este pacote encapsula todas as chamadas c.JSON() e a lógica de tradução de erros. É o ponto de saída final da sua API.
+## 🚀 Como Usar
+
+### 1. Interface HTTP (`pkg/http`)
+Este pacote encapsula chamadas `c.JSON()` e centraliza a lógica de erros.
+
+| Método | Descrição | Status HTTP |
+| :--- | :--- | :---: |
+| `RespondOK` | Sucesso padrão | 200 |
+| `RespondCreated` | Recurso criado | 201 |
+| `RespondUpdated` | Recurso atualizado | 200 |
+| `RespondDeleted` | Recurso removido | 200 |
+| `RespondPaged` | Lista paginada | 200 |
+| `RespondNotFound` | Recurso não encontrado | 404 |
+| `RespondInternalError` | Erro interno (Logs automáticos) | 500 |
 
 ```go
 import httphelpers "github.com/felipedenardo/chameleon-common/pkg/http"
 
 func GetProfile(c *gin.Context) {
-    // Retorna 404
-    httphelpers.RespondNotFound(c)
-    
-    // Retorna 500
-    httphelpers.HandleInternalError(c, err)
-    
     // Sucesso 201
     httphelpers.RespondCreated(c, data)
+    
+    // Erro 500 (Gera log interno com o erro original)
+    httphelpers.RespondInternalError(c, err)
 }
 ```
 
-### 2. Autenticação e Autorização (pkg/middleware)
-O Middleware verifica o Token JWT emitido pelo auth-api e injeta userID e role no contexto do Gin. Agora com suporte nativo a **Blacklist** e **Token Versioning**.
+### 2. Autenticação e Autorização (`pkg/middleware`)
+O Middleware verifica o Token JWT e injeta `userID` e `role` no contexto do Gin.
 
 ```go
 import (
@@ -47,36 +87,28 @@ import (
     "github.com/felipedenardo/chameleon-common/pkg/security"
 )
 
-func SetupProtectedRoutes(r *gin.Engine, cfg *Config, blacklist security.BlacklistTokenChecker, versioning security.TokenVersionChecker) {
-    // Agora o middleware exige checkers de segurança
-    authMiddleware := middleware.AuthMiddleware(cfg.JWTSecret, blacklist, versioning)
+func SetupRoutes(r *gin.Engine, blacklist security.BlacklistTokenChecker, versioning security.TokenVersionChecker) {
+    authMiddleware := middleware.AuthMiddleware("sua-secret", blacklist, versioning)
     
-    protectedRoutes := r.Group("/api/v1/profiles").Use(authMiddleware)
+    api := r.Group("/api/v1").Use(authMiddleware)
     {
-        protectedRoutes.GET("/me", userHandler.GetProfile) 
+        api.GET("/me", handler.Me) 
     }
 }
 ```
 
-#### Segurança Adicional
-- **Blacklist Check:** Verifica se o `jti` do token foi revogado (Logout).
-- **Token Versioning:** Valida se a versão do token (`token_version` claim) é inferior à versão atual do usuário no banco/cache (Global Logout).
-
-### 3. Padronização de Respostas (pkg/response)
-A biblioteca fornece Atalhos (mensagens automáticas) e métodos Customizados.
+### 3. Padronização de Respostas (`pkg/response`)
+Estructuras prontas para retornar JSON no formato JSEND.
 
 ```go
 import "github.com/felipedenardo/chameleon-common/pkg/response"
 
-func MyHandler(c *gin.Context) {
-    c.JSON(201, response.NewCreated(data))
-    c.JSON(200, response.NewPaged(lista, page, perPage, total))
-    c.JSON(400, response.NewFailCustom("Resposta customizada", nil))
-}
+// Resposta manual se necessário
+c.JSON(200, response.NewPaged(lista, page, perPage, total))
 ```
 
 ### 4. Validação Automática
-Wrapper que traduz erros técnicos do go-playground/validator para o formato response.FieldError
+Tradução de erros do `go-playground/validator` para mensagens amigáveis.
 
 ```go
 import (
@@ -86,28 +118,33 @@ import (
 
 func Login(c *gin.Context) {
     if errs := validation.ValidateRequest(req); errs != nil {
-        httphelpers.RespondValidation(c, errs)
+        httphelpers.RespondValidation(c, errs) // Retorna 400 com detalhes
         return
     }
 }
 ```
 
-### 5. Base Model com UUID
+### 5. Base Model e DTOs (`pkg/base`)
+Padronização de IDs e auditoria para GORM.
 
 ```go
 import "github.com/felipedenardo/chameleon-common/pkg/base"
  
-type Professional struct {
-    base.Model
-    Name string `json:"name"`
+type User struct {
+    base.Model // Inclui ID (UUID), CreatedAt, UpdatedAt, DeletedAt
+    Username string
 }
-// ...
+
+// Transformação para DTO
+userDTO := base.ToDTO(user)
 ```
 
-### Versionamento
+---
+
+## 🏷️ Versionamento
 
 Este projeto utiliza **SemVer (Semantic Versioning)**.
 As releases são controladas por **Git Tags**.
 
-- **v0.x.x** — Desenvolvimento
-- **v1.0.0** — Estável
+- **v0.x.x** — Desenvolvimento / Beta
+- **v1.0.0** — Estável para Produção
