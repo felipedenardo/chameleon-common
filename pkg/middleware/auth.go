@@ -95,7 +95,10 @@ func GetUserID(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	userIDStr, ok := userID.(string)
-	return userIDStr, ok
+	if !ok || userIDStr == "" {
+		return "", false
+	}
+	return userIDStr, true
 }
 
 // GetRawToken retrieves the rawTokenString from the context
@@ -105,6 +108,9 @@ func GetRawToken(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	tokenStr, ok := token.(string)
+	if !ok || tokenStr == "" {
+		return "", false
+	}
 	return tokenStr, ok
 }
 
