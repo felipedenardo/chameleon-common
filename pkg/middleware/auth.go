@@ -87,3 +87,45 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 		c.Next()
 	}
 }
+
+// GetUserID retrieves the userID from the context
+func GetUserID(c *gin.Context) (string, bool) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		return "", false
+	}
+	userIDStr, ok := userID.(string)
+	return userIDStr, ok
+}
+
+// GetRawToken retrieves the rawTokenString from the context
+func GetRawToken(c *gin.Context) (string, bool) {
+	token, exists := c.Get(RawTokenKey)
+	if !exists {
+		return "", false
+	}
+	tokenStr, ok := token.(string)
+	return tokenStr, ok
+}
+
+// RequireUserID retrieves the userID from the context or responds with 401 Unauthorized
+func RequireUserID(c *gin.Context) (string, bool) {
+	userIDStr, ok := GetUserID(c)
+	if !ok {
+		httphelpers.RespondUnauthorized(c, "Authentication context missing")
+		c.Abort()
+		return "", false
+	}
+	return userIDStr, true
+}
+
+// RequireRawToken retrieves the raw token from the context or responds with 401 Unauthorized
+func RequireRawToken(c *gin.Context) (string, bool) {
+	tokenStr, ok := GetRawToken(c)
+	if !ok {
+		httphelpers.RespondUnauthorized(c, "Authentication context missing")
+		c.Abort()
+		return "", false
+	}
+	return tokenStr, true
+}
