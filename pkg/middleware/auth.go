@@ -126,9 +126,6 @@ func validateTokenType(claims jwt.MapClaims) bool {
 
 func validateIssuer(claims jwt.MapClaims) bool {
 	issuer := strings.TrimSpace(os.Getenv("JWT_ISSUER"))
-	if issuer == "" {
-		return false
-	}
 	iss, ok := claims["iss"].(string)
 	if !ok {
 		return false
@@ -138,9 +135,6 @@ func validateIssuer(claims jwt.MapClaims) bool {
 
 func validateAudience(claims jwt.MapClaims) bool {
 	audience := strings.TrimSpace(os.Getenv("JWT_AUDIENCE"))
-	if audience == "" {
-		return false
-	}
 
 	switch aud := claims["aud"].(type) {
 	case string:

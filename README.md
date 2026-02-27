@@ -97,6 +97,31 @@ func SetupRoutes(r *gin.Engine, blacklist security.BlacklistTokenChecker, versio
 }
 ```
 
+Variáveis de ambiente esperadas pelo `AuthMiddleware`:
+
+| Variável | Obrigatória | Descrição |
+| :--- | :---: | :--- |
+| `JWT_ISSUER` | Sim | Valor esperado no claim `iss`. |
+| `JWT_AUDIENCE` | Sim | Valor esperado no claim `aud`. |
+| `JWT_LEEWAY_SECONDS` | Não | Tolerância de clock skew para `exp/nbf/iat` (segundos). |
+
+Exemplo (em `.env` ou no ambiente do serviço consumidor):
+
+```bash
+JWT_ISSUER=chameleon-auth-api
+JWT_AUDIENCE=chameleon-services
+JWT_LEEWAY_SECONDS=30
+```
+
+Proteção por role:
+
+```go
+api := r.Group("/api/v1").Use(authMiddleware)
+{
+    api.GET("/admin/stats", middleware.RequireRole("admin"), handler.AdminStats)
+}
+```
+
 ### 3. Padronização de Respostas (`pkg/response`)
 Estructuras prontas para retornar JSON no formato JSEND.
 
