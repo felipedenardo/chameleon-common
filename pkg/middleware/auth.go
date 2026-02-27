@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	httphelpers "github.com/felipedenardo/chameleon-common/pkg/http"
 	"github.com/felipedenardo/chameleon-common/pkg/security"
@@ -24,20 +27,8 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
-		tokenUnverified, _, _ := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
-		if claims, ok := tokenUnverified.Claims.(jwt.MapClaims); ok {
-			jti, _ := claims["jti"].(string)
-
-			isBlacklisted, err := blacklistTokenChecker.IsTokenBlacklisted(c.Request.Context(), jti)
-
-			if err != nil || isBlacklisted {
-				httphelpers.RespondUnauthorized(c, "Token revogado ou erro de segurança.")
-				c.Abort()
-				return
-			}
-		}
-
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		parser := jwt.NewParser(jwt.WithLeeway(getJWTLeeway()))
+		token, err := parser.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, jwt.ErrSignatureInvalid
 			}
@@ -53,15 +44,52 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 		}
 
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
-			userID, okUserID := claims["sub"].(string)
-			if okUserID {
-				c.Set("userID", userID)
+			if !validateIssuer(claims) || !validateAudience(claims) {
+				httphelpers.RespondUnauthorized(c, "Invalid token issuer or audience")
+				c.Abort()
+				return
 			}
+
+			if !validateTokenType(claims) {
+				httphelpers.RespondUnauthorized(c, "Invalid token type")
+				c.Abort()
+				return
+			}
+
+			userID, okUserID := claims["sub"].(string)
+			if !okUserID || strings.TrimSpace(userID) == "" {
+				httphelpers.RespondUnauthorized(c, "Missing subject")
+				c.Abort()
+				return
+			}
+			c.Set("userID", userID)
 			if role, ok := claims["role"].(string); ok {
 				c.Set("role", role)
 			}
 
-			if tokenVersionChecker != nil && okUserID {
+			jti, okJTI := claims["jti"].(string)
+			if !okJTI || strings.TrimSpace(jti) == "" {
+				httphelpers.RespondUnauthorized(c, "Missing token identifier")
+				c.Abort()
+				return
+			}
+
+			if blacklistTokenChecker != nil {
+				isBlacklisted, err := blacklistTokenChecker.IsTokenBlacklisted(c.Request.Context(), jti)
+				if err != nil || isBlacklisted {
+					httphelpers.RespondUnauthorized(c, "Token revogado ou erro de segurança.")
+					c.Abort()
+					return
+				}
+			}
+
+			if tokenVersionChecker != nil {
+				if _, ok := claims["token_version"]; !ok {
+					httphelpers.RespondUnauthorized(c, "Missing token version")
+					c.Abort()
+					return
+				}
+
 				tokenVersionClaim := 0
 				if tv, ok := claims["token_version"].(float64); ok {
 					tokenVersionClaim = int(tv)
@@ -86,6 +114,52 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 
 		c.Next()
 	}
+}
+
+func validateTokenType(claims jwt.MapClaims) bool {
+	typ, ok := claims["typ"].(string)
+	if !ok {
+		return false
+	}
+	return typ == "access"
+}
+
+func validateIssuer(claims jwt.MapClaims) bool {
+	issuer := strings.TrimSpace(os.Getenv("JWT_ISSUER"))
+	if issuer == "" {
+		return false
+	}
+	iss, ok := claims["iss"].(string)
+	if !ok {
+		return false
+	}
+	return iss == issuer
+}
+
+func validateAudience(claims jwt.MapClaims) bool {
+	audience := strings.TrimSpace(os.Getenv("JWT_AUDIENCE"))
+	if audience == "" {
+		return false
+	}
+
+	switch aud := claims["aud"].(type) {
+	case string:
+		return aud == audience
+	case []string:
+		for _, a := range aud {
+			if a == audience {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, a := range aud {
+			if s, ok := a.(string); ok && s == audience {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // GetUserID retrieves the userID from the context
@@ -134,4 +208,45 @@ func RequireRawToken(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	return tokenStr, true
+}
+
+// RequireRole validates whether the user's role matches one of the allowed roles.
+func RequireRole(roles ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, ok := c.Get("role")
+		if !ok {
+			httphelpers.RespondUnauthorized(c, "Authentication context missing")
+			c.Abort()
+			return
+		}
+
+		roleStr, ok := role.(string)
+		if !ok || roleStr == "" {
+			httphelpers.RespondUnauthorized(c, "Authentication context missing")
+			c.Abort()
+			return
+		}
+
+		for _, allowed := range roles {
+			if roleStr == allowed {
+				c.Next()
+				return
+			}
+		}
+
+		httphelpers.RespondForbidden(c, "Insufficient role")
+		c.Abort()
+	}
+}
+
+func getJWTLeeway() time.Duration {
+	value := strings.TrimSpace(os.Getenv("JWT_LEEWAY_SECONDS"))
+	if value == "" {
+		return 0
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds < 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }

@@ -42,6 +42,10 @@ func RespondUnauthorized(c *gin.Context, message string) {
 	c.JSON(http.StatusUnauthorized, response.NewErrorCustom(message))
 }
 
+func RespondForbidden(c *gin.Context, message string) {
+	c.JSON(http.StatusForbidden, response.NewErrorCustom(message))
+}
+
 func RespondDomainFail(c *gin.Context, message string) {
 	c.JSON(http.StatusBadRequest, response.NewFailCustom(message, nil))
 }
