@@ -13,6 +13,8 @@ import (
 )
 
 const RawTokenKey = "rawTokenString"
+const PermissionsKey = "permissions"
+const userIDKey = "userID"
 
 func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -62,9 +64,12 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 				c.Abort()
 				return
 			}
-			c.Set("userID", userID)
+			c.Set(userIDKey, userID)
 			if role, ok := claims["role"].(string); ok {
 				c.Set("role", role)
+			}
+			if permissions := extractPermissions(claims["permissions"]); len(permissions) > 0 {
+				c.Set(PermissionsKey, permissions)
 			}
 
 			jti, okJTI := claims["jti"].(string)
@@ -158,7 +163,7 @@ func validateAudience(claims jwt.MapClaims) bool {
 
 // GetUserID retrieves the userID from the context
 func GetUserID(c *gin.Context) (string, bool) {
-	userID, exists := c.Get("userID")
+	userID, exists := c.Get(userIDKey)
 	if !exists {
 		return "", false
 	}
@@ -230,6 +235,81 @@ func RequireRole(roles ...string) gin.HandlerFunc {
 
 		httphelpers.RespondForbidden(c, "Insufficient role")
 		c.Abort()
+	}
+}
+
+// GetPermissions retrieves permissions from the context.
+func GetPermissions(c *gin.Context) ([]string, bool) {
+	permissions, exists := c.Get(PermissionsKey)
+	if !exists {
+		return nil, false
+	}
+
+	switch values := permissions.(type) {
+	case []string:
+		if len(values) == 0 {
+			return nil, false
+		}
+		return values, true
+	case []interface{}:
+		normalized := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if ok && strings.TrimSpace(text) != "" {
+				normalized = append(normalized, text)
+			}
+		}
+		if len(normalized) == 0 {
+			return nil, false
+		}
+		return normalized, true
+	default:
+		return nil, false
+	}
+}
+
+// RequirePermission validates whether the user has at least one of the allowed permissions.
+func RequirePermission(permissions ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		granted, ok := GetPermissions(c)
+		if !ok {
+			httphelpers.RespondUnauthorized(c, "Authentication context missing")
+			c.Abort()
+			return
+		}
+
+		permissionSet := make(map[string]struct{}, len(granted))
+		for _, permission := range granted {
+			permissionSet[permission] = struct{}{}
+		}
+
+		for _, allowed := range permissions {
+			if _, exists := permissionSet[allowed]; exists {
+				c.Next()
+				return
+			}
+		}
+
+		httphelpers.RespondForbidden(c, "Insufficient permission")
+		c.Abort()
+	}
+}
+
+func extractPermissions(raw interface{}) []string {
+	switch values := raw.(type) {
+	case []string:
+		return values
+	case []interface{}:
+		permissions := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if ok && strings.TrimSpace(text) != "" {
+				permissions = append(permissions, text)
+			}
+		}
+		return permissions
+	default:
+		return nil
 	}
 }
 
