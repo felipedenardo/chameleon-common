@@ -273,7 +273,7 @@ func RequirePermission(permissions ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		granted, ok := GetPermissions(c)
 		if !ok {
-			httphelpers.RespondUnauthorized(c, "Authentication context missing")
+			httphelpers.RespondForbidden(c, "Insufficient permission")
 			c.Abort()
 			return
 		}
