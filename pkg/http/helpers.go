@@ -6,7 +6,7 @@ import (
 	"github.com/felipedenardo/chameleon-common/pkg/validation"
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
-	"log"
+	zlog "github.com/rs/zerolog/log"
 	"net/http"
 )
 
@@ -51,7 +51,7 @@ func RespondDomainFail(c *gin.Context, message string) {
 }
 
 func RespondInternalError(c *gin.Context, err error) {
-	log.Printf("[SERVER ERROR] Unhandled error: %v", err)
+	zlog.Error().Err(err).Msg("Unhandled server error")
 	c.JSON(http.StatusInternalServerError, response.NewInternalErr())
 }
 
