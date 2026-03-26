@@ -19,6 +19,21 @@ const establishmentIDKey = "establishment_id"
 const establishmentSlugKey = "establishment_slug"
 
 func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
+	issuer := strings.TrimSpace(os.Getenv("JWT_ISSUER"))
+	audience := strings.TrimSpace(os.Getenv("JWT_AUDIENCE"))
+	leeway := getJWTLeeway()
+
+	var parserOpts []jwt.ParserOption
+	parserOpts = append(parserOpts, jwt.WithLeeway(leeway))
+	if issuer != "" {
+		parserOpts = append(parserOpts, jwt.WithIssuer(issuer))
+	}
+	if audience != "" {
+		parserOpts = append(parserOpts, jwt.WithAudience(audience))
+	}
+
+	parser := jwt.NewParser(parserOpts...)
+
 	return func(c *gin.Context) {
 
 		authHeader := c.GetHeader("Authorization")
@@ -31,7 +46,6 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
-		parser := jwt.NewParser(jwt.WithLeeway(getJWTLeeway()))
 		token, err := parser.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, jwt.ErrSignatureInvalid
@@ -48,12 +62,6 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 		}
 
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
-			if !validateIssuer(claims) || !validateAudience(claims) {
-				httphelpers.RespondUnauthorized(c, "Invalid token issuer or audience")
-				c.Abort()
-				return
-			}
-
 			if !validateTokenType(claims) {
 				httphelpers.RespondUnauthorized(c, "Invalid token type")
 				c.Abort()
@@ -106,8 +114,6 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 				tokenVersionClaim := 0
 				if tv, ok := claims["token_version"].(float64); ok {
 					tokenVersionClaim = int(tv)
-				} else if tv, ok := claims["token_version"].(int); ok {
-					tokenVersionClaim = tv // In case the JWT library unmarshals as int
 				}
 
 				currentVersion, err := tokenVersionChecker.GetUserTokenVersion(c.Request.Context(), userID)
@@ -135,38 +141,6 @@ func validateTokenType(claims jwt.MapClaims) bool {
 		return false
 	}
 	return typ == "access"
-}
-
-func validateIssuer(claims jwt.MapClaims) bool {
-	issuer := strings.TrimSpace(os.Getenv("JWT_ISSUER"))
-	iss, ok := claims["iss"].(string)
-	if !ok {
-		return false
-	}
-	return iss == issuer
-}
-
-func validateAudience(claims jwt.MapClaims) bool {
-	audience := strings.TrimSpace(os.Getenv("JWT_AUDIENCE"))
-
-	switch aud := claims["aud"].(type) {
-	case string:
-		return aud == audience
-	case []string:
-		for _, a := range aud {
-			if a == audience {
-				return true
-			}
-		}
-	case []interface{}:
-		for _, a := range aud {
-			if s, ok := a.(string); ok && s == audience {
-				return true
-			}
-		}
-	}
-
-	return false
 }
 
 // GetUserID retrieves the userID from the context
@@ -323,27 +297,12 @@ func GetPermissions(c *gin.Context) ([]string, bool) {
 		return nil, false
 	}
 
-	switch values := permissions.(type) {
-	case []string:
-		if len(values) == 0 {
-			return nil, false
-		}
-		return values, true
-	case []interface{}:
-		normalized := make([]string, 0, len(values))
-		for _, value := range values {
-			text, ok := value.(string)
-			if ok && strings.TrimSpace(text) != "" {
-				normalized = append(normalized, text)
-			}
-		}
-		if len(normalized) == 0 {
-			return nil, false
-		}
-		return normalized, true
-	default:
+	values, ok := permissions.([]string)
+	if !ok || len(values) == 0 {
 		return nil, false
 	}
+
+	return values, true
 }
 
 // RequirePermission validates whether the user has at least one of the allowed permissions.

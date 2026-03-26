@@ -21,11 +21,12 @@ Biblioteca de utilitários compartilhados (**Shared Kernel**) para o ecossistema
 
 ## 🎯 Visão Geral
 
-O objetivo desta biblioteca é padronizar:
-- **Segurança e Acesso**: Middleware JWT com suporte a Blacklist e Versionamento.
-- **Respostas da API**: Padronização baseada no formato JSEND.
+O objetivo desta biblioteca é padronizar todo o código comum para apoiar **Arquiteturas Multi-Tenant e Cross-Services**:
+- **Segurança Multi-Tenant**: Middleware JWT focado em RBAC (funções e permissões complexas com wildcards) e extração nativa de Tenant (`establishment_id` e `establishment_slug`).
+- **Prevenção Cross-Tenant**: Middleware nativo para bloquear acessos indevidos fora do escopo do Tenant (`RequireEstablishmentSlug`).
+- **Respostas da API**: Padronização baseada no formato JSEND, idêntica em todos os serviços.
 - **Validação de Dados**: Wrapper amigável para o `validator v10`.
-- **Modelos de Banco**: Implementação de UUID v4 & Soft Delete nativos.
+- **Modelos de Banco**: Implementação de UUID v4 & Soft Delete nativos para GORM.
 
 ## 📂 Estrutura do Projeto
 
@@ -79,7 +80,7 @@ func GetProfile(c *gin.Context) {
 ```
 
 ### 2. Autenticação e Autorização (`pkg/middleware`)
-O Middleware verifica o Token JWT e injeta `userID` e `role` no contexto do Gin.
+O Middleware verifica o Token JWT fornecido pelo Auth API e injeta diretamente no contexto do Gin (`userID`, `role`, `permissions`, `establishment_id` e `establishment_slug`), blindando completamente a arquitetura de **Multi-Tenant**.
 
 ```go
 import (
@@ -92,12 +93,23 @@ func SetupRoutes(r *gin.Engine, blacklist security.BlacklistTokenChecker, versio
     
     api := r.Group("/api/v1").Use(authMiddleware)
     {
+        // 🔒 Rotas Genéricas (Sem estabelecimento/tenant definido)
         api.GET("/me", handler.Me) 
+
+        // 🏢 Rotas Multi-Tenant (Cross-Tenant Middleware bloqueia tentativas indevidas)
+        tenant := api.Group("/establishments/:slug").Use(middleware.RequireEstablishmentSlug())
+        {
+            // Validação exata da role
+            tenant.GET("/stats", middleware.RequireRole("admin", "manager"), handler.Stats)
+
+            // 🌟 Validação de Permissões com suporte a Wildcards (* e module.*)
+            tenant.POST("/appointments", middleware.RequirePermission("appointments.create"), handler.CreateAppt)
+        }
     }
 }
 ```
 
-Variáveis de ambiente esperadas pelo `AuthMiddleware`:
+Variáveis de ambiente esperadas pelo `AuthMiddleware` (Lidas apenas uma vez no momento do Setup da rota, garantindo máxima performance):
 
 | Variável | Obrigatória | Descrição |
 | :--- | :---: | :--- |
@@ -111,15 +123,6 @@ Exemplo (em `.env` ou no ambiente do serviço consumidor):
 JWT_ISSUER=chameleon-auth-api
 JWT_AUDIENCE=chameleon-services
 JWT_LEEWAY_SECONDS=30
-```
-
-Proteção por role:
-
-```go
-api := r.Group("/api/v1").Use(authMiddleware)
-{
-    api.GET("/admin/stats", middleware.RequireRole("admin"), handler.AdminStats)
-}
 ```
 
 ### 3. Padronização de Respostas (`pkg/response`)
