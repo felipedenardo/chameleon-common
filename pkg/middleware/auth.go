@@ -15,6 +15,8 @@ import (
 const RawTokenKey = "rawTokenString"
 const PermissionsKey = "permissions"
 const userIDKey = "userID"
+const establishmentIDKey = "establishment_id"
+const establishmentSlugKey = "establishment_slug"
 
 func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -67,6 +69,12 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 			c.Set(userIDKey, userID)
 			if role, ok := claims["role"].(string); ok {
 				c.Set("role", role)
+			}
+			if estID, ok := claims["establishment_id"].(string); ok {
+				c.Set(establishmentIDKey, estID)
+			}
+			if estSlug, ok := claims["establishment_slug"].(string); ok {
+				c.Set(establishmentSlugKey, estSlug)
 			}
 			if permissions := extractPermissions(claims["permissions"]); len(permissions) > 0 {
 				c.Set(PermissionsKey, permissions)
@@ -209,6 +217,76 @@ func RequireRawToken(c *gin.Context) (string, bool) {
 	return tokenStr, true
 }
 
+// GetEstablishmentID retrieves the establishment_id from the context
+func GetEstablishmentID(c *gin.Context) (string, bool) {
+	estID, exists := c.Get(establishmentIDKey)
+	if !exists {
+		return "", false
+	}
+	estIDStr, ok := estID.(string)
+	if !ok || estIDStr == "" {
+		return "", false
+	}
+	return estIDStr, true
+}
+
+// RequireEstablishmentID retrieves the establishment_id from the context or responds with 401 Unauthorized
+func RequireEstablishmentID(c *gin.Context) (string, bool) {
+	estIDStr, ok := GetEstablishmentID(c)
+	if !ok {
+		httphelpers.RespondUnauthorized(c, "Establishment context missing")
+		c.Abort()
+		return "", false
+	}
+	return estIDStr, true
+}
+
+// GetEstablishmentSlug retrieves the establishment_slug from the context
+func GetEstablishmentSlug(c *gin.Context) (string, bool) {
+	estSlug, exists := c.Get(establishmentSlugKey)
+	if !exists {
+		return "", false
+	}
+	estSlugStr, ok := estSlug.(string)
+	if !ok || estSlugStr == "" {
+		return "", false
+	}
+	return estSlugStr, true
+}
+
+// RequireEstablishmentSlugContext retrieves the establishment_slug from the context or responds with 401 Unauthorized
+func RequireEstablishmentSlugContext(c *gin.Context) (string, bool) {
+	estSlugStr, ok := GetEstablishmentSlug(c)
+	if !ok {
+		httphelpers.RespondUnauthorized(c, "Establishment slug context missing")
+		c.Abort()
+		return "", false
+	}
+	return estSlugStr, true
+}
+
+// RequireEstablishmentSlug is a middleware that enforces Cross-Tenant boundaries.
+// It retrieves the "slug" param from the URL path and compares it exactly with
+// the token's establishment_slug. If no slug param is present, allows generic routes.
+func RequireEstablishmentSlug() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		routeSlug := c.Param("slug")
+		if routeSlug == "" {
+			c.Next()
+			return
+		}
+
+		tokenSlug, ok := GetEstablishmentSlug(c)
+		if !ok || tokenSlug != routeSlug {
+			httphelpers.RespondForbidden(c, "Cross-Tenant access denied")
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
 // RequireRole validates whether the user's role matches one of the allowed roles.
 func RequireRole(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -269,6 +347,7 @@ func GetPermissions(c *gin.Context) ([]string, bool) {
 }
 
 // RequirePermission validates whether the user has at least one of the allowed permissions.
+// Supports exact match and wildcards in the granted permissions (e.g. "*" or "appointments.*").
 func RequirePermission(permissions ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		granted, ok := GetPermissions(c)
@@ -278,15 +357,19 @@ func RequirePermission(permissions ...string) gin.HandlerFunc {
 			return
 		}
 
-		permissionSet := make(map[string]struct{}, len(granted))
-		for _, permission := range granted {
-			permissionSet[permission] = struct{}{}
-		}
-
 		for _, allowed := range permissions {
-			if _, exists := permissionSet[allowed]; exists {
-				c.Next()
-				return
+			for _, g := range granted {
+				if g == "*" || g == allowed {
+					c.Next()
+					return
+				}
+				if strings.HasSuffix(g, ".*") {
+					prefix := strings.TrimSuffix(g, ".*")
+					if allowed == prefix || strings.HasPrefix(allowed, prefix+".") {
+						c.Next()
+						return
+					}
+				}
 			}
 		}
 
