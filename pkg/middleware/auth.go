@@ -250,6 +250,16 @@ func RequireEstablishmentSlug() gin.HandlerFunc {
 			return
 		}
 
+		// Allow platform administrators to bypass slug validation
+		if granted, ok := GetPermissions(c); ok {
+			for _, g := range granted {
+				if g == "*" || g == "platform.*" {
+					c.Next()
+					return
+				}
+			}
+		}
+
 		tokenSlug, ok := GetEstablishmentSlug(c)
 		if !ok || tokenSlug != routeSlug {
 			httphelpers.RespondForbidden(c, "Cross-Tenant access denied")
