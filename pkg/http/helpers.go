@@ -38,6 +38,10 @@ func RespondNotFound(c *gin.Context) {
 	c.JSON(http.StatusNotFound, response.NewNotFound())
 }
 
+func RespondNoContent(c *gin.Context) {
+	c.JSON(http.StatusNoContent, response.NewNotFound())
+}
+
 func RespondUnauthorized(c *gin.Context, message string) {
 	c.JSON(http.StatusUnauthorized, response.NewErrorCustom(message))
 }
