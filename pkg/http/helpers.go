@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"github.com/felipedenardo/chameleon-common/pkg/response"
 	"github.com/felipedenardo/chameleon-common/pkg/validation"
@@ -58,7 +59,24 @@ func RespondDomainFail(c *gin.Context, message string) {
 	c.JSON(http.StatusBadRequest, response.NewFailCustom(message, nil))
 }
 
+func RespondClientCancelled(c *gin.Context) {
+	zlog.Info().Msg("Client closed the connection")
+	c.JSON(499, response.NewFailCustom("A requisição foi cancelada pelo usuário.", nil))
+}
+
 func RespondInternalError(c *gin.Context, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		zlog.Warn().Err(err).Msg("Operation timed out")
+		RespondTimeout(c)
+		return
+	}
+
+	if errors.Is(err, context.Canceled) {
+		zlog.Info().Msg("Client cancelled the request")
+		RespondClientCancelled(c)
+		return
+	}
+
 	zlog.Error().Err(err).Msg("Unhandled server error")
 	c.JSON(http.StatusInternalServerError, response.NewInternalErr())
 }
