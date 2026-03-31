@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"github.com/google/uuid"
 	"os"
 	"strconv"
 	"strings"
@@ -197,6 +198,20 @@ func RequireRawToken(c *gin.Context) (string, bool) {
 		return "", false
 	}
 	return tokenStr, true
+}
+
+func GetEstablishmentUUID(c *gin.Context) (uuid.UUID, bool) {
+	estID, ok := GetEstablishmentID(c)
+	if !ok {
+		return uuid.Nil, false
+	}
+
+	id, err := uuid.Parse(estID)
+	if err != nil {
+		return uuid.Nil, false
+	}
+
+	return id, true
 }
 
 // GetEstablishmentID retrieves the establishment_id from the context
