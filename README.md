@@ -109,6 +109,23 @@ func SetupRoutes(r *gin.Engine, blacklist security.BlacklistTokenChecker, versio
 }
 ```
 
+Para rotas `/:slug/...` que precisam garantir o `establishment_id` no contexto mesmo para usuários globais, use a variante com resolver injetado pelo microserviço:
+
+```go
+resolver := middleware.EstablishmentResolverFunc(func(ctx context.Context, slug string) (string, error) {
+    return establishmentService.ResolveIDBySlug(ctx, slug)
+})
+
+tenant := api.Group("/establishments/:slug").Use(
+    middleware.RequireEstablishmentSlugWithResolver(resolver),
+)
+```
+
+Fluxo resumido:
+- usuário comum: reaproveita `establishment_slug` e `establishment_id` do token
+- owner: seleciona o `establishment_id` correspondente ao `slug` dentro de `establishment_slugs`/`establishment_ids`
+- admin/global: se faltar `establishment_id`, chama o resolver para materializar o tenant ativo sem acoplar a shared lib ao banco
+
 Variáveis de ambiente esperadas pelo `AuthMiddleware` (Lidas apenas uma vez no momento do Setup da rota, garantindo máxima performance):
 
 | Variável | Obrigatória | Descrição |

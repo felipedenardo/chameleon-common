@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"github.com/google/uuid"
 	"os"
 	"strconv"
@@ -20,6 +21,19 @@ const establishmentIDKey = "establishment_id"
 const establishmentSlugKey = "establishment_slug"
 const establishmentIDsKey = "establishment_ids"
 const establishmentSlugsKey = "establishment_slugs"
+
+// EstablishmentResolver resolves the active establishment ID for slug-based routes.
+// The concrete implementation lives in the consumer microservice.
+type EstablishmentResolver interface {
+	ResolveEstablishmentID(ctx context.Context, slug string) (string, error)
+}
+
+// EstablishmentResolverFunc adapts a function to EstablishmentResolver.
+type EstablishmentResolverFunc func(ctx context.Context, slug string) (string, error)
+
+func (f EstablishmentResolverFunc) ResolveEstablishmentID(ctx context.Context, slug string) (string, error) {
+	return f(ctx, slug)
+}
 
 func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
 	issuer := strings.TrimSpace(os.Getenv("JWT_ISSUER"))
@@ -292,6 +306,25 @@ func GetEstablishmentSlugs(c *gin.Context) ([]string, bool) {
 // It retrieves the "slug" param from the URL path and compares it exactly with
 // the token's establishment_slug. If no slug param is present, allows generic routes.
 func RequireEstablishmentSlug() gin.HandlerFunc {
+	return requireEstablishmentSlug(nil)
+}
+
+// RequireEstablishmentSlugWithResolver extends slug validation with tenant resolution.
+// It keeps the legacy behavior for token-backed users and only uses the resolver when
+// global/platform users need an establishment_id inferred from the route slug.
+func RequireEstablishmentSlugWithResolver(resolver EstablishmentResolver) gin.HandlerFunc {
+	return requireEstablishmentSlug(resolver)
+}
+
+// RequireEstablishmentSlugFunc is a convenience helper for function-based resolvers.
+func RequireEstablishmentSlugFunc(resolver func(ctx context.Context, slug string) (string, error)) gin.HandlerFunc {
+	if resolver == nil {
+		return requireEstablishmentSlug(nil)
+	}
+	return requireEstablishmentSlug(EstablishmentResolverFunc(resolver))
+}
+
+func requireEstablishmentSlug(resolver EstablishmentResolver) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		routeSlug := c.Param("slug")
 		if routeSlug == "" {
@@ -299,41 +332,81 @@ func RequireEstablishmentSlug() gin.HandlerFunc {
 			return
 		}
 
-		// Allow platform administrators to bypass slug validation
-		if granted, ok := GetPermissions(c); ok {
-			for _, g := range granted {
-				if g == "*" || g == "platform.*" {
-					c.Next()
-					return
-				}
-			}
-		}
-
-		// 1. Check direct establishment_slug (for standard users/managers)
-		tokenSlug, okSlug := GetEstablishmentSlug(c)
-		if okSlug && tokenSlug == routeSlug {
-			c.Next()
+		allowed, err := resolveEstablishmentContextFromSlug(c, routeSlug, resolver)
+		if err != nil {
+			httphelpers.RespondInternalError(c, err)
+			c.Abort()
 			return
 		}
 
-		// 2. Check plural establishment_slugs (for owners with multiple establishments)
-		// This enables owners to log in once and access all their units.
-		if slugs, okSlugs := GetEstablishmentSlugs(c); okSlugs {
-			for i, s := range slugs {
-				if s == routeSlug {
-					// Found a match. Set the corresponding establishment_id as the ACTIVE one in context.
-					if ids, okIDs := GetEstablishmentIDs(c); okIDs && len(ids) > i {
-						c.Set(establishmentIDKey, ids[i])
-					}
-					c.Next()
-					return
-				}
-			}
+		if allowed {
+			c.Next()
+			return
 		}
 
 		httphelpers.RespondForbidden(c, "Cross-Tenant access denied")
 		c.Abort()
 	}
+}
+
+func resolveEstablishmentContextFromSlug(c *gin.Context, routeSlug string, resolver EstablishmentResolver) (bool, error) {
+	if tokenSlug, ok := GetEstablishmentSlug(c); ok && tokenSlug == routeSlug {
+		c.Set(establishmentSlugKey, routeSlug)
+		return true, nil
+	}
+
+	if slugs, ok := GetEstablishmentSlugs(c); ok {
+		for i, slug := range slugs {
+			if slug != routeSlug {
+				continue
+			}
+
+			c.Set(establishmentSlugKey, routeSlug)
+			if ids, okIDs := GetEstablishmentIDs(c); okIDs && len(ids) > i {
+				c.Set(establishmentIDKey, ids[i])
+			}
+			return true, nil
+		}
+	}
+
+	if !hasGlobalEstablishmentAccess(c) {
+		return false, nil
+	}
+
+	c.Set(establishmentSlugKey, routeSlug)
+	if _, ok := GetEstablishmentID(c); ok {
+		return true, nil
+	}
+
+	if resolver == nil {
+		return true, nil
+	}
+
+	establishmentID, err := resolver.ResolveEstablishmentID(c.Request.Context(), routeSlug)
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(establishmentID) == "" {
+		return false, nil
+	}
+
+	c.Set(establishmentIDKey, establishmentID)
+	return true, nil
+}
+
+func hasGlobalEstablishmentAccess(c *gin.Context) bool {
+	granted, ok := GetPermissions(c)
+	if !ok {
+		return false
+	}
+
+	for _, permission := range granted {
+		if permission == "*" || permission == "platform.*" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // RequireRole validates whether the user's role matches one of the allowed roles.
