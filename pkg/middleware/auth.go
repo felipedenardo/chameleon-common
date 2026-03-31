@@ -17,6 +17,8 @@ const PermissionsKey = "permissions"
 const userIDKey = "userID"
 const establishmentIDKey = "establishment_id"
 const establishmentSlugKey = "establishment_slug"
+const establishmentIDsKey = "establishment_ids"
+const establishmentSlugsKey = "establishment_slugs"
 
 func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
 	issuer := strings.TrimSpace(os.Getenv("JWT_ISSUER"))
@@ -83,6 +85,12 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 			}
 			if estSlug, ok := claims["establishment_slug"].(string); ok {
 				c.Set(establishmentSlugKey, estSlug)
+			}
+			if estIDs := extractStringSlice(claims["establishment_ids"]); len(estIDs) > 0 {
+				c.Set(establishmentIDsKey, estIDs)
+			}
+			if estSlugs := extractStringSlice(claims["establishment_slugs"]); len(estSlugs) > 0 {
+				c.Set(establishmentSlugsKey, estSlugs)
 			}
 			if permissions := extractPermissions(claims["permissions"]); len(permissions) > 0 {
 				c.Set(PermissionsKey, permissions)
@@ -239,6 +247,32 @@ func RequireEstablishmentSlugContext(c *gin.Context) (string, bool) {
 	return estSlugStr, true
 }
 
+// GetEstablishmentIDs retrieves the establishment_ids from the context
+func GetEstablishmentIDs(c *gin.Context) ([]string, bool) {
+	estIDs, exists := c.Get(establishmentIDsKey)
+	if !exists {
+		return nil, false
+	}
+	estIDsSlice, ok := estIDs.([]string)
+	if !ok || len(estIDsSlice) == 0 {
+		return nil, false
+	}
+	return estIDsSlice, true
+}
+
+// GetEstablishmentSlugs retrieves the establishment_slugs from the context
+func GetEstablishmentSlugs(c *gin.Context) ([]string, bool) {
+	estSlugs, exists := c.Get(establishmentSlugsKey)
+	if !exists {
+		return nil, false
+	}
+	estSlugsSlice, ok := estSlugs.([]string)
+	if !ok || len(estSlugsSlice) == 0 {
+		return nil, false
+	}
+	return estSlugsSlice, true
+}
+
 // RequireEstablishmentSlug is a middleware that enforces Cross-Tenant boundaries.
 // It retrieves the "slug" param from the URL path and compares it exactly with
 // the token's establishment_slug. If no slug param is present, allows generic routes.
@@ -260,14 +294,30 @@ func RequireEstablishmentSlug() gin.HandlerFunc {
 			}
 		}
 
-		tokenSlug, ok := GetEstablishmentSlug(c)
-		if !ok || tokenSlug != routeSlug {
-			httphelpers.RespondForbidden(c, "Cross-Tenant access denied")
-			c.Abort()
+		// 1. Check direct establishment_slug (for standard users/managers)
+		tokenSlug, okSlug := GetEstablishmentSlug(c)
+		if okSlug && tokenSlug == routeSlug {
+			c.Next()
 			return
 		}
 
-		c.Next()
+		// 2. Check plural establishment_slugs (for owners with multiple establishments)
+		// This enables owners to log in once and access all their units.
+		if slugs, okSlugs := GetEstablishmentSlugs(c); okSlugs {
+			for i, s := range slugs {
+				if s == routeSlug {
+					// Found a match. Set the corresponding establishment_id as the ACTIVE one in context.
+					if ids, okIDs := GetEstablishmentIDs(c); okIDs && len(ids) > i {
+						c.Set(establishmentIDKey, ids[i])
+					}
+					c.Next()
+					return
+				}
+			}
+		}
+
+		httphelpers.RespondForbidden(c, "Cross-Tenant access denied")
+		c.Abort()
 	}
 }
 
@@ -347,22 +397,26 @@ func RequirePermission(permissions ...string) gin.HandlerFunc {
 	}
 }
 
-func extractPermissions(raw interface{}) []string {
+func extractStringSlice(raw interface{}) []string {
 	switch values := raw.(type) {
 	case []string:
 		return values
 	case []interface{}:
-		permissions := make([]string, 0, len(values))
+		slice := make([]string, 0, len(values))
 		for _, value := range values {
 			text, ok := value.(string)
 			if ok && strings.TrimSpace(text) != "" {
-				permissions = append(permissions, text)
+				slice = append(slice, text)
 			}
 		}
-		return permissions
+		return slice
 	default:
 		return nil
 	}
+}
+
+func extractPermissions(raw interface{}) []string {
+	return extractStringSlice(raw)
 }
 
 func getJWTLeeway() time.Duration {
