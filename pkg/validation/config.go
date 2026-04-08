@@ -1,10 +1,11 @@
 package validation
 
 import (
-	"github.com/gin-gonic/gin/binding"
-	"github.com/go-playground/validator/v10"
 	"reflect"
 	"strings"
+
+	"github.com/gin-gonic/gin/binding"
+	"github.com/go-playground/validator/v10"
 )
 
 func SetupCustomValidator() {
@@ -16,5 +17,14 @@ func SetupCustomValidator() {
 			}
 			return name
 		})
+		if err := v.RegisterValidation("br_document", validateBRDocument); err != nil {
+			panic(err)
+		}
+		if err := v.RegisterValidation("br_phone", validateBRPhone); err != nil {
+			panic(err)
+		}
+		if err := v.RegisterValidation("br_zip", validateBRZip); err != nil {
+			panic(err)
+		}
 	}
 }

@@ -70,6 +70,14 @@ func validationErrorMessage(fe validator.FieldError) string {
 		return "must be a valid UUID"
 	case "url":
 		return "must be a valid URL"
+	case "br_document":
+		return "must be a valid CPF or CNPJ"
+	case "br_phone":
+		return "must be a valid Brazilian phone number"
+	case "br_zip":
+		return "must be a valid CEP"
+	case "birth_date":
+		return "must be a valid birth date"
 	case "numeric":
 		return "must be a numeric value"
 	case "alphanum":
