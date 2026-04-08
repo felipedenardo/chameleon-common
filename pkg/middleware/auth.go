@@ -252,6 +252,17 @@ func RequireEstablishmentID(c *gin.Context) (string, bool) {
 	return estIDStr, true
 }
 
+func RequireUUIDParam(c *gin.Context, paramName string) (string, bool) {
+	value := c.Param(paramName)
+	if _, err := uuid.Parse(value); err != nil {
+		httphelpers.RespondParamError(c, paramName, "invalid UUID")
+		c.Abort()
+		return "", false
+	}
+
+	return value, true
+}
+
 // GetEstablishmentSlug retrieves the establishment_slug from the context
 func GetEstablishmentSlug(c *gin.Context) (string, bool) {
 	estSlug, exists := c.Get(establishmentSlugKey)
