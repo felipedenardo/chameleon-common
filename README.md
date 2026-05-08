@@ -52,7 +52,7 @@ Fluxo mais comum em um microservico Gin:
 1. adicionar `RequestLogger`
 2. proteger a API com `AuthMiddleware`
 3. aplicar `RequireRole` e `RequirePermission` nas rotas necessarias
-4. usar `RequireEstablishmentSlug` nas rotas multi-tenant por `:slug`
+4. usar `RequireEstablishmentContext` nas rotas multi-tenant por `:slug`
 5. responder handlers com `pkg/http`
 6. validar payloads com `pkg/validation`
 
@@ -100,7 +100,7 @@ func main() {
 	})
 
 	tenant := api.Group("/establishments/:slug").Use(
-		middleware.RequireEstablishmentSlug(),
+		middleware.RequireEstablishmentContext(),
 	)
 
 	tenant.GET(
@@ -130,17 +130,18 @@ func main() {
 - use `RequirePermission` quando a protecao precisa ser mais granular
 - permissoes aceitam match exato e wildcards como `*` e `appointments.*`
 
-`RequireEstablishmentSlug`:
+`RequireEstablishmentContext`:
 
 - use em rotas como `/:slug/...`
-- garante que o usuario so atue dentro do tenant permitido
-- para usuarios com acesso global, o servico pode injetar um resolver para materializar o `establishment_id`
+- garante que usuarios comuns so atuem dentro do tenant permitido e com `establishment_id` no token
+- para platform admin, o servico pode injetar um resolver para materializar o `establishment_id` a partir do slug
+- `RequireEstablishmentSlug` continua existindo como alias de compatibilidade
 
 Exemplo com resolver:
 
 ```go
 tenant := api.Group("/establishments/:slug").Use(
-	middleware.RequireEstablishmentSlugWithResolver(
+	middleware.RequireEstablishmentContextWithResolver(
 		middleware.EstablishmentResolverFunc(func(ctx context.Context, slug string) (string, error) {
 			return establishmentService.ResolveIDBySlug(ctx, slug)
 		}),

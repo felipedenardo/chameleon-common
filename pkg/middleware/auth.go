@@ -19,8 +19,6 @@ const PermissionsKey = "permissions"
 const userIDKey = "userID"
 const establishmentIDKey = "establishment_id"
 const establishmentSlugKey = "establishment_slug"
-const establishmentIDsKey = "establishment_ids"
-const establishmentSlugsKey = "establishment_slugs"
 
 // EstablishmentResolver resolves the active establishment ID for slug-based routes.
 // The concrete implementation lives in the consumer microservice.
@@ -100,12 +98,6 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 			}
 			if estSlug, ok := claims["establishment_slug"].(string); ok {
 				c.Set(establishmentSlugKey, estSlug)
-			}
-			if estIDs := extractStringSlice(claims["establishment_ids"]); len(estIDs) > 0 {
-				c.Set(establishmentIDsKey, estIDs)
-			}
-			if estSlugs := extractStringSlice(claims["establishment_slugs"]); len(estSlugs) > 0 {
-				c.Set(establishmentSlugsKey, estSlugs)
 			}
 			if permissions := extractPermissions(claims["permissions"]); len(permissions) > 0 {
 				c.Set(PermissionsKey, permissions)
@@ -287,55 +279,42 @@ func RequireEstablishmentSlugContext(c *gin.Context) (string, bool) {
 	return estSlugStr, true
 }
 
-// GetEstablishmentIDs retrieves the establishment_ids from the context
-func GetEstablishmentIDs(c *gin.Context) ([]string, bool) {
-	estIDs, exists := c.Get(establishmentIDsKey)
-	if !exists {
-		return nil, false
-	}
-	estIDsSlice, ok := estIDs.([]string)
-	if !ok || len(estIDsSlice) == 0 {
-		return nil, false
-	}
-	return estIDsSlice, true
+// RequireEstablishmentContext is a middleware that enforces tenant boundaries.
+// Regular users must carry an establishment_id in the token and match the route slug.
+// Platform admins may resolve the route slug dynamically when a resolver is provided.
+func RequireEstablishmentContext() gin.HandlerFunc {
+	return requireEstablishmentContext(nil)
 }
 
-// GetEstablishmentSlugs retrieves the establishment_slugs from the context
-func GetEstablishmentSlugs(c *gin.Context) ([]string, bool) {
-	estSlugs, exists := c.Get(establishmentSlugsKey)
-	if !exists {
-		return nil, false
-	}
-	estSlugsSlice, ok := estSlugs.([]string)
-	if !ok || len(estSlugsSlice) == 0 {
-		return nil, false
-	}
-	return estSlugsSlice, true
+// RequireEstablishmentContextWithResolver extends tenant validation with slug resolution.
+func RequireEstablishmentContextWithResolver(resolver EstablishmentResolver) gin.HandlerFunc {
+	return requireEstablishmentContext(resolver)
 }
 
-// RequireEstablishmentSlug is a middleware that enforces Cross-Tenant boundaries.
-// It retrieves the "slug" param from the URL path and compares it exactly with
-// the token's establishment_slug. If no slug param is present, allows generic routes.
-func RequireEstablishmentSlug() gin.HandlerFunc {
-	return requireEstablishmentSlug(nil)
-}
-
-// RequireEstablishmentSlugWithResolver extends slug validation with tenant resolution.
-// It keeps the legacy behavior for token-backed users and only uses the resolver when
-// global/platform users need an establishment_id inferred from the route slug.
-func RequireEstablishmentSlugWithResolver(resolver EstablishmentResolver) gin.HandlerFunc {
-	return requireEstablishmentSlug(resolver)
-}
-
-// RequireEstablishmentSlugFunc is a convenience helper for function-based resolvers.
-func RequireEstablishmentSlugFunc(resolver func(ctx context.Context, slug string) (string, error)) gin.HandlerFunc {
+// RequireEstablishmentContextFunc is a convenience helper for function-based resolvers.
+func RequireEstablishmentContextFunc(resolver func(ctx context.Context, slug string) (string, error)) gin.HandlerFunc {
 	if resolver == nil {
-		return requireEstablishmentSlug(nil)
+		return requireEstablishmentContext(nil)
 	}
-	return requireEstablishmentSlug(EstablishmentResolverFunc(resolver))
+	return requireEstablishmentContext(EstablishmentResolverFunc(resolver))
 }
 
-func requireEstablishmentSlug(resolver EstablishmentResolver) gin.HandlerFunc {
+// RequireEstablishmentSlug keeps the old name as a compatibility alias.
+func RequireEstablishmentSlug() gin.HandlerFunc {
+	return RequireEstablishmentContext()
+}
+
+// RequireEstablishmentSlugWithResolver keeps the old name as a compatibility alias.
+func RequireEstablishmentSlugWithResolver(resolver EstablishmentResolver) gin.HandlerFunc {
+	return RequireEstablishmentContextWithResolver(resolver)
+}
+
+// RequireEstablishmentSlugFunc keeps the old name as a compatibility alias.
+func RequireEstablishmentSlugFunc(resolver func(ctx context.Context, slug string) (string, error)) gin.HandlerFunc {
+	return RequireEstablishmentContextFunc(resolver)
+}
+
+func requireEstablishmentContext(resolver EstablishmentResolver) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		routeSlug := c.Param("slug")
 		if routeSlug == "" {
@@ -361,36 +340,37 @@ func requireEstablishmentSlug(resolver EstablishmentResolver) gin.HandlerFunc {
 }
 
 func resolveEstablishmentContextFromSlug(c *gin.Context, routeSlug string, resolver EstablishmentResolver) (bool, error) {
+	if hasPlatformAccess(c) {
+		c.Set(establishmentSlugKey, routeSlug)
+		if resolver == nil {
+			_, ok := GetEstablishmentID(c)
+			return ok, nil
+		}
+
+		establishmentID, err := resolver.ResolveEstablishmentID(c.Request.Context(), routeSlug)
+		if err != nil {
+			return false, err
+		}
+		if strings.TrimSpace(establishmentID) == "" {
+			return false, nil
+		}
+
+		c.Set(establishmentIDKey, establishmentID)
+		return true, nil
+	}
+
+	tokenID, hasTokenID := GetEstablishmentID(c)
+	if !hasTokenID {
+		return false, nil
+	}
+
 	if tokenSlug, ok := GetEstablishmentSlug(c); ok && tokenSlug == routeSlug {
 		c.Set(establishmentSlugKey, routeSlug)
 		return true, nil
 	}
 
-	if slugs, ok := GetEstablishmentSlugs(c); ok {
-		for i, slug := range slugs {
-			if slug != routeSlug {
-				continue
-			}
-
-			c.Set(establishmentSlugKey, routeSlug)
-			if ids, okIDs := GetEstablishmentIDs(c); okIDs && len(ids) > i {
-				c.Set(establishmentIDKey, ids[i])
-			}
-			return true, nil
-		}
-	}
-
-	if !hasGlobalEstablishmentAccess(c) {
-		return false, nil
-	}
-
-	c.Set(establishmentSlugKey, routeSlug)
-	if _, ok := GetEstablishmentID(c); ok {
-		return true, nil
-	}
-
 	if resolver == nil {
-		return true, nil
+		return false, nil
 	}
 
 	establishmentID, err := resolver.ResolveEstablishmentID(c.Request.Context(), routeSlug)
@@ -400,12 +380,16 @@ func resolveEstablishmentContextFromSlug(c *gin.Context, routeSlug string, resol
 	if strings.TrimSpace(establishmentID) == "" {
 		return false, nil
 	}
+	if establishmentID != tokenID {
+		return false, nil
+	}
 
 	c.Set(establishmentIDKey, establishmentID)
+	c.Set(establishmentSlugKey, routeSlug)
 	return true, nil
 }
 
-func hasGlobalEstablishmentAccess(c *gin.Context) bool {
+func hasPlatformAccess(c *gin.Context) bool {
 	granted, ok := GetPermissions(c)
 	if !ok {
 		return false
