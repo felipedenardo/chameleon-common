@@ -1,10 +1,7 @@
 package middleware
 
 import (
-	"os"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -19,21 +16,15 @@ const PermissionsKey = "permissions"
 const userIDKey = "userID"
 const establishmentIDKey = "establishment_id"
 
-func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
-	issuer := strings.TrimSpace(os.Getenv("JWT_ISSUER"))
-	audience := strings.TrimSpace(os.Getenv("JWT_AUDIENCE"))
-	leeway := getJWTLeeway()
-
-	var parserOpts []jwt.ParserOption
-	parserOpts = append(parserOpts, jwt.WithLeeway(leeway))
-	if issuer != "" {
-		parserOpts = append(parserOpts, jwt.WithIssuer(issuer))
-	}
-	if audience != "" {
-		parserOpts = append(parserOpts, jwt.WithAudience(audience))
-	}
-
-	parser := jwt.NewParser(parserOpts...)
+// AuthMiddleware extrai e autoriza as claims de um token de usuário (typ=access)
+// — NÃO reverifica assinatura/expiração. Essa validação é feita pelo Kong
+// (plugin jwt) na borda, a única porta de entrada externa desde a Fase 3 do
+// plano Kong (ver /home/felipecws/.claude/plans/partitioned-mapping-parnas.md).
+// Isso só é seguro porque nenhum serviço publica porta pro host além do Kong —
+// se essa invariante mudar (porta reaberta, rota exposta fora do Kong), essa
+// função precisa voltar a validar a assinatura sozinha.
+func AuthMiddleware(blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
+	parser := jwt.NewParser()
 
 	return func(c *gin.Context) {
 
@@ -47,85 +38,79 @@ func AuthMiddleware(secretKey string, blacklistTokenChecker security.BlacklistTo
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
-		token, err := parser.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, jwt.ErrSignatureInvalid
-			}
-			return []byte(secretKey), nil
-		})
+		claims := jwt.MapClaims{}
+		_, _, err := parser.ParseUnverified(tokenString, claims)
 
 		c.Set(RawTokenKey, tokenString)
 
-		if err != nil || !token.Valid {
+		if err != nil {
 			httphelpers.RespondUnauthorized(c, "Invalid or expired token")
 			c.Abort()
 			return
 		}
 
-		if claims, ok := token.Claims.(jwt.MapClaims); ok {
-			if !validateTokenType(claims) {
-				httphelpers.RespondUnauthorized(c, "Invalid token type")
+		if !validateTokenType(claims) {
+			httphelpers.RespondUnauthorized(c, "Invalid token type")
+			c.Abort()
+			return
+		}
+
+		userID, okUserID := claims["sub"].(string)
+		if !okUserID || strings.TrimSpace(userID) == "" {
+			httphelpers.RespondUnauthorized(c, "Missing subject")
+			c.Abort()
+			return
+		}
+		c.Set(userIDKey, userID)
+		if role, ok := claims["role"].(string); ok {
+			c.Set("role", role)
+		}
+		if estID, ok := claims["establishment_id"].(string); ok {
+			c.Set(establishmentIDKey, estID)
+		}
+		if permissions := extractPermissions(claims["permissions"]); len(permissions) > 0 {
+			c.Set(PermissionsKey, permissions)
+		}
+
+		jti, okJTI := claims["jti"].(string)
+		if !okJTI || strings.TrimSpace(jti) == "" {
+			httphelpers.RespondUnauthorized(c, "Missing token identifier")
+			c.Abort()
+			return
+		}
+
+		if blacklistTokenChecker != nil {
+			isBlacklisted, err := blacklistTokenChecker.IsTokenBlacklisted(c.Request.Context(), jti)
+			if err != nil || isBlacklisted {
+				httphelpers.RespondUnauthorized(c, "Token revogado ou erro de segurança.")
+				c.Abort()
+				return
+			}
+		}
+
+		if tokenVersionChecker != nil {
+			if _, ok := claims["token_version"]; !ok {
+				httphelpers.RespondUnauthorized(c, "Missing token version")
 				c.Abort()
 				return
 			}
 
-			userID, okUserID := claims["sub"].(string)
-			if !okUserID || strings.TrimSpace(userID) == "" {
-				httphelpers.RespondUnauthorized(c, "Missing subject")
-				c.Abort()
-				return
-			}
-			c.Set(userIDKey, userID)
-			if role, ok := claims["role"].(string); ok {
-				c.Set("role", role)
-			}
-			if estID, ok := claims["establishment_id"].(string); ok {
-				c.Set(establishmentIDKey, estID)
-			}
-			if permissions := extractPermissions(claims["permissions"]); len(permissions) > 0 {
-				c.Set(PermissionsKey, permissions)
+			tokenVersionClaim := 0
+			if tv, ok := claims["token_version"].(float64); ok {
+				tokenVersionClaim = int(tv)
 			}
 
-			jti, okJTI := claims["jti"].(string)
-			if !okJTI || strings.TrimSpace(jti) == "" {
-				httphelpers.RespondUnauthorized(c, "Missing token identifier")
+			currentVersion, err := tokenVersionChecker.GetUserTokenVersion(c.Request.Context(), userID)
+			if err != nil {
+				httphelpers.RespondUnauthorized(c, "Error verifying token version")
 				c.Abort()
 				return
 			}
 
-			if blacklistTokenChecker != nil {
-				isBlacklisted, err := blacklistTokenChecker.IsTokenBlacklisted(c.Request.Context(), jti)
-				if err != nil || isBlacklisted {
-					httphelpers.RespondUnauthorized(c, "Token revogado ou erro de segurança.")
-					c.Abort()
-					return
-				}
-			}
-
-			if tokenVersionChecker != nil {
-				if _, ok := claims["token_version"]; !ok {
-					httphelpers.RespondUnauthorized(c, "Missing token version")
-					c.Abort()
-					return
-				}
-
-				tokenVersionClaim := 0
-				if tv, ok := claims["token_version"].(float64); ok {
-					tokenVersionClaim = int(tv)
-				}
-
-				currentVersion, err := tokenVersionChecker.GetUserTokenVersion(c.Request.Context(), userID)
-				if err != nil {
-					httphelpers.RespondUnauthorized(c, "Error verifying token version")
-					c.Abort()
-					return
-				}
-
-				if tokenVersionClaim < currentVersion {
-					httphelpers.RespondUnauthorized(c, "Token version mismatch (revoked)")
-					c.Abort()
-					return
-				}
+			if tokenVersionClaim < currentVersion {
+				httphelpers.RespondUnauthorized(c, "Token version mismatch (revoked)")
+				c.Abort()
+				return
 			}
 		}
 
@@ -392,16 +377,4 @@ func extractStringSlice(raw interface{}) []string {
 
 func extractPermissions(raw interface{}) []string {
 	return extractStringSlice(raw)
-}
-
-func getJWTLeeway() time.Duration {
-	value := strings.TrimSpace(os.Getenv("JWT_LEEWAY_SECONDS"))
-	if value == "" {
-		return 0
-	}
-	seconds, err := strconv.Atoi(value)
-	if err != nil || seconds < 0 {
-		return 0
-	}
-	return time.Duration(seconds) * time.Second
 }
