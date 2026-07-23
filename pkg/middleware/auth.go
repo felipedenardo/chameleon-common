@@ -17,12 +17,11 @@ const userIDKey = "userID"
 const establishmentIDKey = "establishment_id"
 
 // AuthMiddleware extrai e autoriza as claims de um token de usuário (typ=access)
-// — NÃO reverifica assinatura/expiração. Essa validação é feita pelo Kong
-// (plugin jwt) na borda, a única porta de entrada externa desde a Fase 3 do
-// plano Kong (ver /home/felipecws/.claude/plans/partitioned-mapping-parnas.md).
-// Isso só é seguro porque nenhum serviço publica porta pro host além do Kong —
-// se essa invariante mudar (porta reaberta, rota exposta fora do Kong), essa
-// função precisa voltar a validar a assinatura sozinha.
+// — NÃO reverifica assinatura/expiração; isso é feito pelo Kong (plugin jwt)
+// na borda, a única porta de entrada externa dos serviços. Isso só é seguro
+// enquanto nenhum serviço publica porta pro host além do Kong — se essa
+// invariante mudar (porta reaberta, rota exposta fora do Kong), esta função
+// precisa voltar a validar a assinatura sozinha.
 func AuthMiddleware(blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
 	parser := jwt.NewParser()
 
