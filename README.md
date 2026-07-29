@@ -1,16 +1,20 @@
 # chameleon-common
 
-Biblioteca Go compartilhada pelos microservicos do ecossistema Chameleon.
+Biblioteca Go compartilhada pelos microsservicos do ecossistema Chameleon.
 
-Ela existe para evitar duplicacao de infraestrutura entre APIs e manter um comportamento padrao em autenticacao, contexto tenant, respostas HTTP e validacao.
+Ela existe para evitar duplicacao de infraestrutura entre APIs e manter um comportamento padrao em autenticacao, autenticacao service-to-service, contexto tenant, bootstrap HTTP, respostas HTTP e validacao.
 
 ## Quando usar
 
 Use esta lib quando o microservico precisar de pelo menos um destes pontos:
 
-- validar JWT e expor dados do usuario no `gin.Context`
+- extrair e autorizar claims de um token de usuario (`typ=access`) no `gin.Context`
 - proteger rotas por role ou permissao
-- trabalhar com rotas por `:slug` de estabelecimento
+- isolar rotas multi-tenant por `establishment_id`
+- autenticar chamadas service-to-service com token de servico assinado por RSA
+- montar o servidor HTTP padrao do servico (recovery, logging, security headers, swagger, health)
+- registrar chamada HTTP externa com circuit breaker
+- logger estruturado padronizado
 - responder com o formato HTTP padrao da plataforma
 - validar requests com mensagens consistentes
 - reutilizar modelo base para entidades GORM
@@ -26,17 +30,18 @@ Esta lib nao deve:
 - depender de repositories concretos
 - resolver dependencias externas por conta propria
 
-Se um fluxo precisa transformar `slug -> establishment_id`, por exemplo, o servico consumidor injeta essa regra. A lib so define o contrato e o fluxo.
-
 ## O que ela entrega
 
 Pacotes principais:
 
-- `pkg/middleware`: autenticacao JWT, autorizacao, contexto tenant e logging de request
+- `pkg/middleware`: extracao/autorizacao de claims de usuario, token de servico (RSA), contexto tenant, security headers e logging de request
+- `pkg/security`: assinatura/validacao de token de servico via RSA, e interfaces para blacklist e versionamento de token de usuario
+- `pkg/httpserver`: bootstrap do `*http.Server` padrao (recovery, logger, security headers, swagger opcional, health)
+- `pkg/circuitbreaker`: circuit breaker generico para chamada HTTP sincrona entre servicos
+- `pkg/log`: logger `zerolog` padronizado (nome do servico, ambiente, nivel)
 - `pkg/http`: helpers para respostas HTTP em handlers Gin
 - `pkg/response`: estrutura padrao de sucesso, erro e paginacao
-- `pkg/validation`: validacao de payloads e traducao de erros
-- `pkg/security`: interfaces para blacklist de token e versionamento
+- `pkg/validation`: validacao de payloads (inclusive documento/telefone/CEP BR) e traducao de erros
 - `pkg/base`: modelo base e DTO base para entidades GORM
 
 ## Como usar
@@ -47,16 +52,43 @@ Instalacao:
 go get github.com/felipedenardo/chameleon-common
 ```
 
-Fluxo mais comum em um microservico Gin:
+### Bootstrap do servidor HTTP
 
-1. adicionar `RequestLogger`
-2. proteger a API com `AuthMiddleware`
-3. aplicar `RequireRole` e `RequirePermission` nas rotas necessarias
-4. usar `RequireEstablishmentContext` nas rotas multi-tenant por `:slug`
-5. responder handlers com `pkg/http`
-6. validar payloads com `pkg/validation`
+`httpserver.New` monta o `*http.Server` com o stack padrao (recovery, request logger, limite de corpo, security headers, swagger opcional e `/health`) — o servico so registra as proprias rotas via callback:
 
-Exemplo enxuto:
+```go
+package main
+
+import (
+	"net/http"
+
+	commonlog "github.com/felipedenardo/chameleon-common/pkg/log"
+	"github.com/felipedenardo/chameleon-common/pkg/httpserver"
+	"github.com/gin-gonic/gin"
+)
+
+func main() {
+	logger := commonlog.New("meu-servico", "development", "info")
+
+	srv := httpserver.New(logger, httpserver.Options{
+		ServiceName:  "meu-servico",
+		Port:         "8080",
+		BasePath:     "/meu-servico",
+		MaxBodyBytes: 1048576,
+		Swagger:      true,
+	}, func(api *gin.RouterGroup) {
+		api.GET("/ping", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"pong": true})
+		})
+	})
+
+	_ = srv.ListenAndServe()
+}
+```
+
+### Autenticacao de usuario
+
+`AuthMiddleware` **extrai e autoriza** as claims de um token `typ=access` — ele **nao reverifica assinatura nem expiracao**: isso e responsabilidade do Kong (plugin `jwt`) na borda, a unica porta de entrada externa dos servicos. Essa premissa so e segura enquanto nenhum servico publica porta pro host alem do Kong.
 
 ```go
 package main
@@ -67,7 +99,6 @@ import (
 	httphelpers "github.com/felipedenardo/chameleon-common/pkg/http"
 	"github.com/felipedenardo/chameleon-common/pkg/middleware"
 	"github.com/gin-gonic/gin"
-	"github.com/rs/zerolog"
 )
 
 type blacklistChecker struct{}
@@ -84,13 +115,8 @@ func (tokenVersionChecker) GetUserTokenVersion(ctx context.Context, userID strin
 
 func main() {
 	r := gin.New()
-	r.Use(middleware.RequestLogger(zerolog.Nop()))
 
-	auth := middleware.AuthMiddleware(
-		"secret",
-		blacklistChecker{},
-		tokenVersionChecker{},
-	)
+	auth := middleware.AuthMiddleware(blacklistChecker{}, tokenVersionChecker{})
 
 	api := r.Group("/api").Use(auth)
 
@@ -99,7 +125,7 @@ func main() {
 		httphelpers.RespondOK(c, gin.H{"user_id": userID})
 	})
 
-	tenant := api.Group("/establishments/:slug").Use(
+	tenant := api.Group("/:establishmentID").Use(
 		middleware.RequireEstablishmentContext(),
 	)
 
@@ -116,13 +142,7 @@ func main() {
 }
 ```
 
-## Como pensar o uso no dia a dia
-
-`AuthMiddleware`:
-
-- valida JWT do tipo `access`
-- injeta no contexto dados como `userID`, `role`, `permissions`, `establishment_id` e `establishment_slug`
-- pode consultar blacklist e versao de token se o servico fornecer as interfaces de `pkg/security`
+`blacklistTokenChecker`/`tokenVersionChecker` sao opcionais — passe `nil` se o servico nao precisar revogar sessao.
 
 `RequireRole` e `RequirePermission`:
 
@@ -132,29 +152,54 @@ func main() {
 
 `RequireEstablishmentContext`:
 
-- use em rotas como `/:slug/...`
-- garante que usuarios comuns so atuem dentro do tenant permitido e com `establishment_id` no token
-- para platform admin, o servico pode injetar um resolver para materializar o `establishment_id` a partir do slug
-- `RequireEstablishmentSlug` continua existindo como alias de compatibilidade
+- usa em rotas como `/:establishmentID/...` — o parametro de rota **e sempre o id imutavel**, nunca um slug
+- usuario comum so passa se o `establishment_id` do token bater com o da rota
+- platform admin (permissao `*` ou `platform.*`) atua sobre qualquer tenant indicado na rota
 
-Exemplo com resolver:
+### Autenticacao service-to-service
+
+Chamada HTTP sincrona entre servicos (nao iniciada por usuario) usa um token de servico curto, assinado com a chave **privada** RSA do servico chamador. Quem recebe valida contra a chave **publica** correspondente, mapeada por `sub` (subject) num allow-list — um `sub` fora do mapa e rejeitado mesmo com assinatura valida contra outra chave.
+
+Lado que chama:
 
 ```go
-tenant := api.Group("/establishments/:slug").Use(
-	middleware.RequireEstablishmentContextWithResolver(
-		middleware.EstablishmentResolverFunc(func(ctx context.Context, slug string) (string, error) {
-			return establishmentService.ResolveIDBySlug(ctx, slug)
-		}),
-	),
-)
+privateKey, err := security.LoadRSAPrivateKeyFile(cfg.ServicePrivateKeyPath)
+if err != nil {
+	// tratar erro
+}
+
+token, err := security.SignServiceToken(privateKey, "chameleon-meu-servico")
 ```
 
-`pkg/http` e `pkg/validation`:
+Lado que recebe (rota interna, nunca exposta pelo Kong):
 
-- use `RespondOK`, `RespondCreated`, `RespondValidation`, `RespondInternalError` e afins para manter o mesmo contrato HTTP entre servicos
-- use `ValidateRequest` para devolver erros de payload com nomes de campo consistentes
+```go
+trustedKeys := map[string]*rsa.PublicKey{
+	"chameleon-outro-servico": outroServicoPublicKey,
+}
 
-Exemplo:
+internalGroup := api.Group("/internal", middleware.ServiceTokenMiddleware(trustedKeys))
+```
+
+### Circuit breaker
+
+Para chamada HTTP sincrona a outro servico ou dependencia externa:
+
+```go
+cb := circuitbreaker.New(circuitbreaker.Settings{
+	Name:             "meu-servico-outro-servico",
+	MaxHalfOpenReqs:  1,
+	Interval:         60 * time.Second,
+	Timeout:          30 * time.Second,
+	FailureThreshold: 5,
+})
+
+result, err := circuitbreaker.Execute(cb, func() (Result, error) {
+	return doHTTPCall(ctx)
+})
+```
+
+### Respostas HTTP e validacao
 
 ```go
 type CreateUserRequest struct {
@@ -180,7 +225,7 @@ func CreateUser(c *gin.Context) {
 
 ## Contratos esperados
 
-Se o servico quiser revogar token ou validar versao, ele implementa as interfaces abaixo:
+Se o servico quiser revogar token de usuario ou validar versao, implementa as interfaces abaixo (ambas opcionais em `AuthMiddleware`):
 
 ```go
 type BlacklistTokenChecker interface {
@@ -191,12 +236,6 @@ type TokenVersionChecker interface {
 	GetUserTokenVersion(ctx context.Context, userID string) (int, error)
 }
 ```
-
-Variaveis de ambiente suportadas no JWT:
-
-- `JWT_ISSUER`: valida `iss` quando configurado
-- `JWT_AUDIENCE`: valida `aud` quando configurado
-- `JWT_LEEWAY_SECONDS`: tolerancia para clock skew
 
 ## Para quem evoluir a lib
 
@@ -209,4 +248,4 @@ Mantenha a biblioteca pequena, previsivel e compartilhavel:
 
 ## Versionamento
 
-O projeto segue SemVer.
+O projeto segue SemVer, via tags Git (`v0.30.0`, etc.) — cada microsservico consumidor pina uma versao especifica no `go.mod`, nunca a branch principal.
