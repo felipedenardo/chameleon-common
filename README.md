@@ -223,6 +223,15 @@ func CreateUser(c *gin.Context) {
 }
 ```
 
+`validation.SetupCustomValidator()` registra, no boot do servico, os validators BR (`br_document`, `br_phone`, `br_zip`) no engine de binding do Gin e ajusta o nome dos campos nas mensagens de erro para o `json` tag — chamar uma vez no bootstrap:
+
+```go
+func main() {
+	validation.SetupCustomValidator()
+	// ...
+}
+```
+
 ## Contratos esperados
 
 Se o servico quiser revogar token de usuario ou validar versao, implementa as interfaces abaixo (ambas opcionais em `AuthMiddleware`):
