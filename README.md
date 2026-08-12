@@ -152,7 +152,7 @@ func main() {
 
 `RequireEstablishmentContext`:
 
-- usa em rotas como `/:establishmentID/...` — o parametro de rota **e sempre o id imutavel**, nunca um slug
+- usa em rotas como `/:establishmentID/...` — o parametro de rota **e sempre o id imutavel**
 - usuario comum so passa se o `establishment_id` do token bater com o da rota
 - platform admin (permissao `*` ou `platform.*`) atua sobre qualquer tenant indicado na rota
 

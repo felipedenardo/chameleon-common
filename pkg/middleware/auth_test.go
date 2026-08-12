@@ -10,11 +10,11 @@ import (
 
 // Rede de seguranca da fronteira de tenant.
 //
-// A autorizacao passou a comparar o establishment_id imutavel do token com o
+// A autorizacao compara o establishment_id imutavel do token com o
 // identificador de tenant que chega na rota. Estes testes travam os invariantes
-// de seguranca (mesmo tenant permite, cross-tenant nega 403, ausencia de
-// contexto nega) que valem independentemente de a rota ainda carregar um slug
-// (fail-closed) ou ja carregar o id.
+// de seguranca: mesmo tenant permite, cross-tenant nega 403, ausencia de
+// contexto nega, e valor de rota que nao bate com o formato esperado nega
+// (fail-closed).
 
 func init() {
 	gin.SetMode(gin.TestMode)
@@ -86,7 +86,7 @@ func TestTenantBoundary_AutorizacaoPorID(t *testing.T) {
 			want:       http.StatusForbidden,
 		},
 		{
-			name:       "rota ainda com slug nao bate com id do token e nega (fail-closed)",
+			name:       "valor de rota que nao bate com id do token nega (fail-closed)",
 			tc:         tenantContext{establishmentID: idA},
 			routeEstID: "barbearia-a",
 			want:       http.StatusForbidden,
@@ -103,7 +103,7 @@ func TestTenantBoundary_AutorizacaoPorID(t *testing.T) {
 	}
 }
 
-// Rota sem :slug (ex.: health) passa direto.
+// Rota sem parâmetro de tenant (ex.: health) passa direto.
 func TestTenantBoundary_SemParamPassaDireto(t *testing.T) {
 	r := gin.New()
 	r.GET("/api/v1/health", RequireEstablishmentContext(), func(c *gin.Context) {
