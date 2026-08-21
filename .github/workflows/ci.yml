@@ -56,6 +56,24 @@ jobs:
       - name: go mod tidy
         run: go mod tidy -diff
 
+  vuln:
+    name: Vuln
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+
+      # Reporta apenas vulnerabilidade ALCANCAVEL -- cujos simbolos o codigo de
+      # fato chama -- e nao tudo que existe na arvore de dependencias.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          govulncheck ./...
+
   test:
     name: Test
     runs-on: ubuntu-latest
