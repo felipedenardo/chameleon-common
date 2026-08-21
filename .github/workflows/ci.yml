@@ -1,27 +1,20 @@
-# CI proprio, com os steps inline -- e a excecao da stack.
-#
-# Os outros 7 repos chamam o go-ci.yml reutilizavel do chameleon-devops. Este
-# nao pode: o devops e PRIVADO, e o GitHub so empresta actions e reusable
-# workflows de um repo privado para outros repos PRIVADOS. Este repo e publico
-# (precisa ser, para o `go mod download` dos demais resolver sem token), entao
-# a chamada seria bloqueada.
-#
-# Consequencia: os steps abaixo duplicam o go-ci.yml de proposito. Mudanca na
-# receita de CI precisa ser refletida nos dois lugares.
-#
-# Sem job de docker: este repo e biblioteca, nao tem Dockerfile.
+# CI com steps inline, em vez de chamar o go-ci.yml do chameleon-devops: este
+# repo e publico, e o GitHub so empresta workflow de repo privado para repo
+# privado. Enquanto for assim, mudanca na receita vale nos dois lugares.
 name: CI
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
-  # So em PR: a master e protegida e o CI e o portao de entrada dela.
   pull_request:
-  # Permite rodar pelo botao da aba Actions, sem PR aberta. Nao enfraquece o
-  # portao -- e um gatilho a mais, nao um substituto do pull_request.
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Sem job de docker: e biblioteca, nao tem Dockerfile.
 jobs:
   lint:
     name: Lint
@@ -40,8 +33,7 @@ jobs:
           version: v2.13.1
           args: --timeout=5m --max-issues-per-linter=0 --max-same-issues=0
 
-      # gofmt -l lista os arquivos fora do formato mas sai com codigo 0 mesmo
-      # assim -- por isso o teste e no conteudo da saida, nao no exit code.
+      # gofmt -l sai com codigo 0 mesmo achando algo: o teste e na saida.
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)
@@ -52,7 +44,6 @@ jobs:
             exit 1
           fi
 
-      # Falha se go.mod/go.sum divergirem dos imports reais.
       - name: go mod tidy
         run: go mod tidy -diff
 
@@ -67,8 +58,6 @@ jobs:
           cache: true
       - run: go mod download
 
-      # Reporta apenas vulnerabilidade ALCANCAVEL -- cujos simbolos o codigo de
-      # fato chama -- e nao tudo que existe na arvore de dependencias.
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
