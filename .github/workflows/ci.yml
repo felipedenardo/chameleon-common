@@ -8,6 +8,8 @@
 #
 # Consequencia: os steps abaixo duplicam o go-ci.yml de proposito. Mudanca na
 # receita de CI precisa ser refletida nos dois lugares.
+#
+# Sem job de docker: este repo e biblioteca, nao tem Dockerfile.
 name: CI
 
 on:
@@ -49,6 +51,10 @@ jobs:
             echo "Corrija com: gofmt -w ."
             exit 1
           fi
+
+      # Falha se go.mod/go.sum divergirem dos imports reais.
+      - name: go mod tidy
+        run: go mod tidy -diff
 
   test:
     name: Test
