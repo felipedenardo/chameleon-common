@@ -11,8 +11,4 @@
 *.test
 *.out
 
-
-
-go.sum
-
 .codex
