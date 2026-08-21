@@ -1,7 +1,13 @@
-# Chamador. Toda a logica de CI mora no chameleon-devops; este arquivo so diz
-# "rode o CI Go padrao neste repo". Mudanca na receita de CI acontece la, uma
-# vez, e vale pros 7 repos Go -- e por isso que e um reusable workflow e nao um
-# workflow copiado em cada repo.
+# CI proprio, com os steps inline -- e a excecao da stack.
+#
+# Os outros 7 repos chamam o go-ci.yml reutilizavel do chameleon-devops. Este
+# nao pode: o devops e PRIVADO, e o GitHub so empresta actions e reusable
+# workflows de um repo privado para outros repos PRIVADOS. Este repo e publico
+# (precisa ser, para o `go mod download` dos demais resolver sem token), entao
+# a chamada seria bloqueada.
+#
+# Consequencia: os steps abaixo duplicam o go-ci.yml de proposito. Mudanca na
+# receita de CI precisa ser refletida nos dois lugares.
 name: CI
 
 on:
@@ -11,9 +17,61 @@ on:
   # portao -- e um gatilho a mais, nao um substituto do pull_request.
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  ci:
-    # `uses:` no nivel do JOB (nao dentro de steps) e o que caracteriza a
-    # chamada de um reusable workflow. O @master fixa a referencia -- trocar
-    # por uma tag (@v1) faz mudanca no devops so valer aqui quando a tag mover.
-    uses: felipedenardo/chameleon-devops/.github/workflows/go-ci.yml@master
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.13.1
+          args: --timeout=5m --max-issues-per-linter=0 --max-same-issues=0
+
+      # gofmt -l lista os arquivos fora do formato mas sai com codigo 0 mesmo
+      # assim -- por isso o teste e no conteudo da saida, nao no exit code.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::Arquivos fora do formato do gofmt:"
+            echo "$unformatted"
+            echo "Corrija com: gofmt -w ."
+            exit 1
+          fi
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: go test
+        run: go test -race ./...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: go build
+        run: go build ./...
