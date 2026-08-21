@@ -1,0 +1,19 @@
+# Chamador. Toda a logica de CI mora no chameleon-devops; este arquivo so diz
+# "rode o CI Go padrao neste repo". Mudanca na receita de CI acontece la, uma
+# vez, e vale pros 7 repos Go -- e por isso que e um reusable workflow e nao um
+# workflow copiado em cada repo.
+name: CI
+
+on:
+  # So em PR: a master e protegida e o CI e o portao de entrada dela.
+  pull_request:
+  # Permite rodar pelo botao da aba Actions, sem PR aberta. Nao enfraquece o
+  # portao -- e um gatilho a mais, nao um substituto do pull_request.
+  workflow_dispatch:
+
+jobs:
+  ci:
+    # `uses:` no nivel do JOB (nao dentro de steps) e o que caracteriza a
+    # chamada de um reusable workflow. O @master fixa a referencia -- trocar
+    # por uma tag (@v1) faz mudanca no devops so valer aqui quando a tag mover.
+    uses: felipedenardo/chameleon-devops/.github/workflows/go-ci.yml@master
