@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/felipedenardo/chameleon-common/pkg/metrics"
 	"github.com/felipedenardo/chameleon-common/pkg/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
@@ -21,8 +22,8 @@ type Options struct {
 }
 
 // New monta um *http.Server com o stack padrão dos serviços: recovery,
-// request logger, limite de corpo, security headers, swagger opcional e
-// endpoint de health. O registro das rotas de negócio fica a cargo do
+// request logger, limite de corpo, security headers, métricas, swagger
+// opcional e endpoint de health. O registro das rotas de negócio fica a cargo do
 // callback register, que recebe o grupo /api/v1 já criado — assim cada
 // serviço só se preocupa com as próprias rotas e seus middlewares.
 func New(logger zerolog.Logger, opts Options, register func(api *gin.RouterGroup)) *http.Server {
@@ -32,7 +33,13 @@ func New(logger zerolog.Logger, opts Options, register func(api *gin.RouterGroup
 		middleware.RequestLogger(logger),
 		middleware.MaxBodyBytes(opts.MaxBodyBytes),
 		middleware.SecurityHeaders(),
+		metrics.HTTPMiddleware(opts.ServiceName),
 	)
+
+	// Fora do BasePath de propósito: o Kong roteia por /chameleon-<serviço>,
+	// então /metrics na raiz não casa com rota nenhuma e fica inalcançável
+	// pela borda. O Prometheus raspa pela rede interna, pelo nome do container.
+	r.GET(metrics.Path, gin.WrapH(metrics.Handler()))
 
 	basePath := r.Group(opts.BasePath)
 	if opts.Swagger {
