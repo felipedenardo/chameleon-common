@@ -16,13 +16,43 @@ const PermissionsKey = "permissions"
 const userIDKey = "userID"
 const establishmentIDKey = "establishment_id"
 
-// AuthMiddleware extrai e autoriza as claims de um token de usuário (typ=access)
-// — NÃO reverifica assinatura/expiração; isso é feito pelo Kong (plugin jwt)
-// na borda, a única porta de entrada externa dos serviços. Isso só é seguro
+// AuthMiddleware extrai e autoriza as claims de um token de usuário (typ=access),
+// recusando token deslogado (blacklist) ou emitido antes da última revogação
+// (token_version).
+//
+// Os dois verificadores são OBRIGATÓRIOS. A versão anterior aceitava nil em
+// ambos, e seis serviços subiram assim: deslogar não deslogava, trocar a senha
+// não derrubava sessão, e nada nisso aparecia como erro. Quem realmente precisa
+// rodar sem revogação usa AuthMiddlewareWithoutRevocationChecks, cujo nome
+// aparece no diff.
+//
+// NÃO reverifica assinatura/expiração; isso é feito pelo Kong (plugin jwt) na
+// borda, a única porta de entrada externa dos serviços. Isso só é seguro
 // enquanto nenhum serviço publica porta pro host além do Kong — se essa
 // invariante mudar (porta reaberta, rota exposta fora do Kong), esta função
 // precisa voltar a validar a assinatura sozinha.
 func AuthMiddleware(blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
+	if blacklistTokenChecker == nil || tokenVersionChecker == nil {
+		// Falha no boot, não em runtime: um serviço sem revogação precisa ser
+		// impossível de subir por distração. Quem quer isso de propósito tem
+		// um construtor com nome próprio.
+		panic("middleware.AuthMiddleware: verificadores de revogação são obrigatórios — use AuthMiddlewareWithoutRevocationChecks se a ausência for intencional")
+	}
+	return authMiddleware(blacklistTokenChecker, tokenVersionChecker)
+}
+
+// AuthMiddlewareWithoutRevocationChecks monta a autorização SEM checar
+// revogação: token deslogado continua sendo aceito, e troca de senha não
+// derruba a sessão até o token expirar.
+//
+// Existe para o serviço que ainda não alcança o Redis do auth. Não é o
+// caminho a seguir — o nome é longo de propósito, para que a escolha apareça
+// em quem lê o diff.
+func AuthMiddlewareWithoutRevocationChecks() gin.HandlerFunc {
+	return authMiddleware(nil, nil)
+}
+
+func authMiddleware(blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
 	parser := jwt.NewParser()
 
 	return func(c *gin.Context) {
