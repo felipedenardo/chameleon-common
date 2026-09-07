@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/rsa"
 	"strings"
 
 	"github.com/google/uuid"
@@ -52,7 +53,39 @@ func AuthMiddlewareWithoutRevocationChecks() gin.HandlerFunc {
 	return authMiddleware(nil, nil)
 }
 
+// AuthMiddlewareVerifying é a variante que CONFERE a assinatura RS256 do token
+// com a chave pública do auth-api, em vez de confiar na validação do Kong.
+//
+// A versão que não confere só é segura enquanto nenhum serviço publicar porta
+// além do Kong — quem alcançasse a rede interna forjaria qualquer token, com
+// qualquer sub e qualquer permissão. Conferir aqui tira a segurança das mãos
+// da topologia de rede.
+//
+// Só o auth-api tem a chave privada, então nenhum serviço que valida consegue
+// emitir token.
+func AuthMiddlewareVerifying(
+	userTokenPublicKey *rsa.PublicKey,
+	blacklistTokenChecker security.BlacklistTokenChecker,
+	tokenVersionChecker security.TokenVersionChecker,
+) gin.HandlerFunc {
+	if userTokenPublicKey == nil {
+		panic("middleware.AuthMiddlewareVerifying: chave pública do token de usuário é obrigatória")
+	}
+	if blacklistTokenChecker == nil || tokenVersionChecker == nil {
+		panic("middleware.AuthMiddlewareVerifying: verificadores de revogação são obrigatórios")
+	}
+	return newAuthMiddleware(userTokenPublicKey, blacklistTokenChecker, tokenVersionChecker)
+}
+
 func authMiddleware(blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
+	return newAuthMiddleware(nil, blacklistTokenChecker, tokenVersionChecker)
+}
+
+func newAuthMiddleware(
+	userTokenPublicKey *rsa.PublicKey,
+	blacklistTokenChecker security.BlacklistTokenChecker,
+	tokenVersionChecker security.TokenVersionChecker,
+) gin.HandlerFunc {
 	parser := jwt.NewParser()
 
 	return func(c *gin.Context) {
@@ -68,7 +101,19 @@ func authMiddleware(blacklistTokenChecker security.BlacklistTokenChecker, tokenV
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
 		claims := jwt.MapClaims{}
-		_, _, err := parser.ParseUnverified(tokenString, claims)
+		var err error
+		if userTokenPublicKey != nil {
+			// Método fixado: sem isso, alg=none ou um HS256 usando a própria
+			// chave pública como segredo passariam.
+			_, err = parser.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
+				if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+					return nil, jwt.ErrSignatureInvalid
+				}
+				return userTokenPublicKey, nil
+			})
+		} else {
+			_, _, err = parser.ParseUnverified(tokenString, claims)
+		}
 
 		c.Set(RawTokenKey, tokenString)
 
