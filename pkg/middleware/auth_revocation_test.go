@@ -36,60 +36,41 @@ func (c checkerFalso) GetUserTokenVersion(context.Context, string) (int, error) 
 	return c.version, nil
 }
 
-func TestAuthMiddleware_RecusaVerificadoresNulos(t *testing.T) {
+func TestAuthMiddleware_RecusaConstrucaoIncompleta(t *testing.T) {
+	chave, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	casos := []struct {
 		nome      string
+		chave     *rsa.PublicKey
 		blacklist BlacklistCheckerParaTeste
 		versao    VersionCheckerParaTeste
 	}{
-		{"ambos nulos", nil, nil},
-		{"so blacklist", nil, checkerFalso{}},
-		{"so versao", checkerFalso{}, nil},
+		{"tudo nulo", nil, nil, nil},
+		{"sem chave publica", nil, checkerFalso{}, checkerFalso{}},
+		{"sem blacklist", &chave.PublicKey, nil, checkerFalso{}},
+		{"sem versao", &chave.PublicKey, checkerFalso{}, nil},
 	}
 
 	for _, caso := range casos {
 		t.Run(caso.nome, func(t *testing.T) {
 			defer func() {
 				if recover() == nil {
-					t.Fatal("subir sem verificador de revogacao precisa quebrar o boot, nao passar batido")
+					t.Fatal("montar autorizacao incompleta precisa quebrar o boot, nao passar batido")
 				}
 			}()
-			AuthMiddleware(caso.blacklist, caso.versao)
+			AuthMiddleware(caso.chave, caso.blacklist, caso.versao)
 		})
-	}
-}
-
-// A saída explícita continua existindo — só não se alcança por engano.
-func TestAuthMiddlewareWithoutRevocationChecks_Monta(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	mw := AuthMiddlewareWithoutRevocationChecks()
-	if mw == nil {
-		t.Fatal("o construtor explicito precisa devolver um middleware utilizavel")
-	}
-
-	r := gin.New()
-	r.GET("/x", mw, func(c *gin.Context) { c.Status(http.StatusOK) })
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
-
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("sem Authorization deveria dar 401, deu %d", w.Code)
 	}
 }
 
 // A variante que verifica assinatura existe porque a que nao verifica so e
 // segura enquanto nenhum servico publicar porta alem do Kong. Quem alcancasse
 // a rede interna forjaria token com qualquer sub e qualquer permissao.
-func TestAuthMiddlewareVerifying_RecusaChaveNula(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("sem chave publica nao ha verificacao: precisa quebrar o boot")
-		}
-	}()
-	AuthMiddlewareVerifying(nil, checkerFalso{}, checkerFalso{})
-}
 
-func TestAuthMiddlewareVerifying_RecusaTokenForjado(t *testing.T) {
+func TestAuthMiddleware_RecusaTokenForjado(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	doServico, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -113,7 +94,7 @@ func TestAuthMiddlewareVerifying_RecusaTokenForjado(t *testing.T) {
 	}
 
 	r := gin.New()
-	r.GET("/x", AuthMiddlewareVerifying(&doServico.PublicKey, checkerFalso{}, checkerFalso{}),
+	r.GET("/x", AuthMiddleware(&doServico.PublicKey, checkerFalso{}, checkerFalso{}),
 		func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	w := httptest.NewRecorder()

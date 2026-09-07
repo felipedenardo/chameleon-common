@@ -17,75 +17,35 @@ const PermissionsKey = "permissions"
 const userIDKey = "userID"
 const establishmentIDKey = "establishment_id"
 
-// AuthMiddleware extrai e autoriza as claims de um token de usuário (typ=access),
-// recusando token deslogado (blacklist) ou emitido antes da última revogação
+// AuthMiddleware extrai e autoriza as claims de um token de usuário (typ=access):
+// confere a assinatura RS256 com a chave pública do auth-api, recusa token
+// deslogado (blacklist) e token emitido antes da última revogação
 // (token_version).
 //
-// Os dois verificadores são OBRIGATÓRIOS. A versão anterior aceitava nil em
-// ambos, e seis serviços subiram assim: deslogar não deslogava, trocar a senha
-// não derrubava sessão, e nada nisso aparecia como erro. Quem realmente precisa
-// rodar sem revogação usa AuthMiddlewareWithoutRevocationChecks, cujo nome
-// aparece no diff.
+// Os três parâmetros são obrigatórios, e é essa a razão de existir uma função
+// só: já houve uma versão que aceitava nil nos verificadores, e seis serviços
+// subiram assim — deslogar não deslogava, e trocar a senha não derrubava
+// sessão. Nada falhava, só não acontecia. Aqui a única forma de montar a
+// autorização é montá-la completa.
 //
-// NÃO reverifica assinatura/expiração; isso é feito pelo Kong (plugin jwt) na
-// borda, a única porta de entrada externa dos serviços. Isso só é seguro
-// enquanto nenhum serviço publica porta pro host além do Kong — se essa
-// invariante mudar (porta reaberta, rota exposta fora do Kong), esta função
-// precisa voltar a validar a assinatura sozinha.
-func AuthMiddleware(blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
-	if blacklistTokenChecker == nil || tokenVersionChecker == nil {
-		// Falha no boot, não em runtime: um serviço sem revogação precisa ser
-		// impossível de subir por distração. Quem quer isso de propósito tem
-		// um construtor com nome próprio.
-		panic("middleware.AuthMiddleware: verificadores de revogação são obrigatórios — use AuthMiddlewareWithoutRevocationChecks se a ausência for intencional")
-	}
-	return authMiddleware(blacklistTokenChecker, tokenVersionChecker)
-}
-
-// AuthMiddlewareWithoutRevocationChecks monta a autorização SEM checar
-// revogação: token deslogado continua sendo aceito, e troca de senha não
-// derruba a sessão até o token expirar.
-//
-// Existe para o serviço que ainda não alcança o Redis do auth. Não é o
-// caminho a seguir — o nome é longo de propósito, para que a escolha apareça
-// em quem lê o diff.
-func AuthMiddlewareWithoutRevocationChecks() gin.HandlerFunc {
-	return authMiddleware(nil, nil)
-}
-
-// AuthMiddlewareVerifying é a variante que CONFERE a assinatura RS256 do token
-// com a chave pública do auth-api, em vez de confiar na validação do Kong.
-//
-// A versão que não confere só é segura enquanto nenhum serviço publicar porta
-// além do Kong — quem alcançasse a rede interna forjaria qualquer token, com
-// qualquer sub e qualquer permissão. Conferir aqui tira a segurança das mãos
-// da topologia de rede.
-//
-// Só o auth-api tem a chave privada, então nenhum serviço que valida consegue
-// emitir token.
-func AuthMiddlewareVerifying(
+// Sem conferir a assinatura, a segurança dependeria de nenhum serviço publicar
+// porta além do Kong: quem alcançasse a rede interna forjaria qualquer token,
+// com qualquer sub e qualquer permissão. Só o auth-api tem a chave privada,
+// então nenhum serviço que valida consegue emitir.
+func AuthMiddleware(
 	userTokenPublicKey *rsa.PublicKey,
 	blacklistTokenChecker security.BlacklistTokenChecker,
 	tokenVersionChecker security.TokenVersionChecker,
 ) gin.HandlerFunc {
+	// Falha no boot, não em runtime: subir com autorização parcial precisa ser
+	// impossível por distração, e um serviço que não alcança a lista de
+	// revogação aceitaria token deslogado sem saber.
 	if userTokenPublicKey == nil {
-		panic("middleware.AuthMiddlewareVerifying: chave pública do token de usuário é obrigatória")
+		panic("middleware.AuthMiddleware: chave pública do token de usuário é obrigatória")
 	}
 	if blacklistTokenChecker == nil || tokenVersionChecker == nil {
-		panic("middleware.AuthMiddlewareVerifying: verificadores de revogação são obrigatórios")
+		panic("middleware.AuthMiddleware: verificadores de revogação são obrigatórios")
 	}
-	return newAuthMiddleware(userTokenPublicKey, blacklistTokenChecker, tokenVersionChecker)
-}
-
-func authMiddleware(blacklistTokenChecker security.BlacklistTokenChecker, tokenVersionChecker security.TokenVersionChecker) gin.HandlerFunc {
-	return newAuthMiddleware(nil, blacklistTokenChecker, tokenVersionChecker)
-}
-
-func newAuthMiddleware(
-	userTokenPublicKey *rsa.PublicKey,
-	blacklistTokenChecker security.BlacklistTokenChecker,
-	tokenVersionChecker security.TokenVersionChecker,
-) gin.HandlerFunc {
 	parser := jwt.NewParser()
 
 	return func(c *gin.Context) {
@@ -101,19 +61,14 @@ func newAuthMiddleware(
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
 		claims := jwt.MapClaims{}
-		var err error
-		if userTokenPublicKey != nil {
-			// Método fixado: sem isso, alg=none ou um HS256 usando a própria
-			// chave pública como segredo passariam.
-			_, err = parser.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
-				if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
-					return nil, jwt.ErrSignatureInvalid
-				}
-				return userTokenPublicKey, nil
-			})
-		} else {
-			_, _, err = parser.ParseUnverified(tokenString, claims)
-		}
+		// Método fixado em RSA: sem isso, alg=none ou um HS256 usando a própria
+		// chave pública como segredo passariam pela verificação.
+		_, err := parser.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+				return nil, jwt.ErrSignatureInvalid
+			}
+			return userTokenPublicKey, nil
+		})
 
 		c.Set(RawTokenKey, tokenString)
 
