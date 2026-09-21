@@ -75,3 +75,37 @@ func TestAbatimentoEDerivado(t *testing.T) {
 	require.True(t, lista.Sub(efetivo).Equal(dec("5")),
 		"33.33 - 28.33 = 5.00, exato por construcao")
 }
+
+func TestApplyDiscount(t *testing.T) {
+	for _, tc := range []struct {
+		nome, lista, kind, valor, esperado string
+		conhecida                          bool
+	}{
+		{nome: "percentual despacha para o calculo percentual", lista: "33.33", kind: money.DiscountPercent, valor: "15", esperado: "28.33", conhecida: true},
+		{nome: "quantia despacha para o calculo em dinheiro", lista: "40", kind: money.DiscountAmount, valor: "6", esperado: "34", conhecida: true},
+		{nome: "regra desconhecida cobra o preco cheio", lista: "40", kind: "percentage", valor: "15", esperado: "40", conhecida: false},
+		{nome: "regra vazia cobra o preco cheio", lista: "40", kind: "", valor: "15", esperado: "40", conhecida: false},
+	} {
+		t.Run(tc.nome, func(t *testing.T) {
+			got, conhecida := money.ApplyDiscount(dec(tc.lista), tc.kind, dec(tc.valor))
+			require.Equal(t, tc.conhecida, conhecida, "segundo retorno diz se a regra era conhecida")
+			require.True(t, got.Equal(dec(tc.esperado)), "esperava %s, veio %s", tc.esperado, got)
+		})
+	}
+}
+
+// O despacho não pode divergir das duas funções que ele chama: é justamente a
+// divergência entre cópias do mesmo cálculo que o pacote existe para evitar.
+func TestApplyDiscountNaoDivergeDoCalculoDireto(t *testing.T) {
+	for _, lista := range []string{"0.10", "33.33", "40", "199.99"} {
+		for _, valor := range []string{"0", "15", "100"} {
+			porcento, _ := money.ApplyDiscount(dec(lista), money.DiscountPercent, dec(valor))
+			require.True(t, porcento.Equal(money.ApplyPercentDiscount(dec(lista), dec(valor))),
+				"percentual de %s sobre %s divergiu", valor, lista)
+
+			quantia, _ := money.ApplyDiscount(dec(lista), money.DiscountAmount, dec(valor))
+			require.True(t, quantia.Equal(money.ApplyAmountDiscount(dec(lista), dec(valor))),
+				"quantia de %s sobre %s divergiu", valor, lista)
+		}
+	}
+}

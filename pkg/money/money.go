@@ -27,6 +27,41 @@ func Round(value decimal.Decimal) decimal.Decimal {
 	return value.Round(Scale)
 }
 
+// Vocabulário das regras de desconto da plataforma. É a string que o plano do
+// clube publica, que trafega entre os serviços e que fica gravada na venda.
+//
+// Mora aqui junto do cálculo porque quatro serviços precisavam da mesma
+// palavra: a mesma string escrita em quatro arquivos diverge no dia em que
+// alguém digita "percentage" num deles, e o desconto simplesmente deixa de
+// aplicar sem ninguém errar um teste.
+const (
+	DiscountPercent = "percent"
+	DiscountAmount  = "amount"
+)
+
+// ApplyDiscount devolve o preço efetivo depois da regra pedida, e se a regra
+// era conhecida.
+//
+// Existe porque o despacho entre percentual e quantia estava escrito em três
+// lugares (dois no agendamento, um na venda), e cada cópia é uma chance de o
+// centavo divergir entre a tela que mostra e o caixa que cobra.
+//
+// Regra desconhecida devolve o próprio preço de tabela, e não zero: assim, quem
+// ignorar o segundo retorno cobra o preço cheio em vez de dar o item de graça.
+// O `false` está aí para quem precisa distinguir "o plano não descontou" de
+// "o plano mandou uma regra que este código não entende" -- o segundo é dado
+// corrompido, e cabe a quem chama recusar ou seguir.
+func ApplyDiscount(list decimal.Decimal, kind string, value decimal.Decimal) (decimal.Decimal, bool) {
+	switch kind {
+	case DiscountPercent:
+		return ApplyPercentDiscount(list, value), true
+	case DiscountAmount:
+		return ApplyAmountDiscount(list, value), true
+	default:
+		return list, false
+	}
+}
+
 // ApplyPercentDiscount devolve o preço efetivo depois de um desconto
 // percentual.
 //

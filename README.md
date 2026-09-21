@@ -43,6 +43,7 @@ Pacotes principais:
 - `pkg/response`: estrutura padrao de sucesso, erro e paginacao
 - `pkg/validation`: validacao de payloads (inclusive documento/telefone/CEP BR) e traducao de erros
 - `pkg/base`: modelo base e DTO base para entidades GORM
+- `pkg/money`: aritmetica de dinheiro (arredondamento, desconto) e o vocabulario de desconto (`percent`/`amount`) da plataforma
 
 ## Como usar
 
