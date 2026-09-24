@@ -1,0 +1,4 @@
+# LF no disco em qualquer SO, independente do core.autocrlf de quem clona:
+# scripts e Dockerfiles rodam em container Linux, onde o \r no fim da linha
+# quebra o shebang e os comandos.
+* text=auto eol=lf
