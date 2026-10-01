@@ -53,40 +53,40 @@ func FromValidationErrors(ve validator.ValidationErrors) []response.FieldError {
 func validationErrorMessage(fe validator.FieldError) string {
 	switch fe.Tag() {
 	case "required":
-		return "is required"
+		return "é obrigatório"
 	case "email":
-		return "must be a valid email address"
+		return "precisa ser um e-mail válido"
 	case "min":
-		return "must be at least " + fe.Param() + " characters long"
+		return "precisa ter pelo menos " + fe.Param() + " caracteres"
 	case "max":
-		return "must be at most " + fe.Param() + " characters long"
+		return "pode ter no máximo " + fe.Param() + " caracteres"
 	case "len":
-		return "must be exactly " + fe.Param() + " characters long"
+		return "precisa ter exatamente " + fe.Param() + " caracteres"
 	case "eqfield":
-		return "does not match " + strings.ToLower(fe.Param())
+		return "não confere com " + strings.ToLower(fe.Param())
 	case "oneof":
-		return "must be one of: " + strings.ReplaceAll(fe.Param(), " ", ", ")
+		return "precisa ser um destes: " + strings.ReplaceAll(fe.Param(), " ", ", ")
 	case "uuid":
-		return "must be a valid UUID"
+		return "identificador inválido"
 	case "url":
-		return "must be a valid URL"
+		return "precisa ser um endereço válido"
 	case "br_document":
-		return "must be a valid CPF or CNPJ"
+		return "precisa ser um CPF ou CNPJ válido"
 	case "br_phone":
-		return "must be a valid Brazilian phone number"
+		return "precisa ser um telefone válido"
 	case "br_zip":
-		return "must be a valid CEP"
+		return "precisa ser um CEP válido"
 	case "birth_date":
-		return "must be a valid birth date"
+		return "precisa ser uma data de nascimento válida"
 	case "numeric":
-		return "must be a numeric value"
+		return "precisa ser um número"
 	case "alphanum":
-		return "must contain only letters and numbers"
+		return "só pode ter letras e números"
 	case "gte":
-		return "must be greater than or equal to " + fe.Param()
+		return "precisa ser maior ou igual a " + fe.Param()
 	case "lte":
-		return "must be less than or equal to " + fe.Param()
+		return "precisa ser menor ou igual a " + fe.Param()
 	default:
-		return "is invalid"
+		return "é inválido"
 	}
 }

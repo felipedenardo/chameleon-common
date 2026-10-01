@@ -39,12 +39,13 @@ func RespondNotFound(c *gin.Context) {
 	c.JSON(http.StatusNotFound, response.NewNotFound())
 }
 
+// RespondNoContent responde 204, que por definição não tem corpo.
 func RespondNoContent(c *gin.Context) {
-	c.JSON(http.StatusNoContent, response.NewNotFound())
+	c.Status(http.StatusNoContent)
 }
 
 func RespondTimeout(c *gin.Context) {
-	c.JSON(http.StatusRequestTimeout, response.NewNotFound())
+	c.JSON(http.StatusRequestTimeout, response.NewTimeout())
 }
 
 func RespondUnauthorized(c *gin.Context, message string) {
@@ -61,7 +62,7 @@ func RespondDomainFail(c *gin.Context, message string) {
 
 func RespondClientCancelled(c *gin.Context) {
 	zlog.Info().Msg("Client closed the connection")
-	c.JSON(499, response.NewFailCustom("A requisição foi cancelada pelo usuário.", nil))
+	c.JSON(499, response.NewFailCustom(response.MsgCancelled, nil))
 }
 
 func RespondInternalError(c *gin.Context, err error) {
@@ -90,9 +91,13 @@ func RespondBindingError(c *gin.Context, err error) {
 		return
 	}
 
+	// O texto do parser ("json: cannot unmarshal string into Go struct field
+	// ...") descreve o código, não o pedido: vai para o log, e quem chamou
+	// recebe só que o corpo não está no formato esperado.
+	zlog.Debug().Err(err).Msg("Invalid request body")
 	c.JSON(http.StatusBadRequest, response.NewFailCustom(response.MsgInvalidJSON,
 		[]response.FieldError{
-			response.NewFieldError("body", err.Error()),
+			response.NewFieldError("body", "formato inválido"),
 		},
 	))
 }

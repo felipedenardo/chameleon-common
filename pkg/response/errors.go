@@ -22,6 +22,13 @@ func NewInternalErr() Standard {
 	}
 }
 
+func NewTimeout() Standard {
+	return Standard{
+		Status:  "error",
+		Message: MsgTimeout,
+	}
+}
+
 func NewNotFound() Standard {
 	return Standard{
 		Status:  "error",

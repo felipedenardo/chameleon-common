@@ -53,7 +53,7 @@ func AuthMiddleware(
 		authHeader := c.GetHeader("Authorization")
 
 		if authHeader == "" {
-			httphelpers.RespondUnauthorized(c, "auth header is empty")
+			httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 			c.Abort()
 			return
 		}
@@ -73,20 +73,20 @@ func AuthMiddleware(
 		c.Set(RawTokenKey, tokenString)
 
 		if err != nil {
-			httphelpers.RespondUnauthorized(c, "Invalid or expired token")
+			httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 			c.Abort()
 			return
 		}
 
 		if !validateTokenType(claims) {
-			httphelpers.RespondUnauthorized(c, "Invalid token type")
+			httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 			c.Abort()
 			return
 		}
 
 		userID, okUserID := claims["sub"].(string)
 		if !okUserID || strings.TrimSpace(userID) == "" {
-			httphelpers.RespondUnauthorized(c, "Missing subject")
+			httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 			c.Abort()
 			return
 		}
@@ -103,7 +103,7 @@ func AuthMiddleware(
 
 		jti, okJTI := claims["jti"].(string)
 		if !okJTI || strings.TrimSpace(jti) == "" {
-			httphelpers.RespondUnauthorized(c, "Missing token identifier")
+			httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 			c.Abort()
 			return
 		}
@@ -111,7 +111,7 @@ func AuthMiddleware(
 		if blacklistTokenChecker != nil {
 			isBlacklisted, err := blacklistTokenChecker.IsTokenBlacklisted(c.Request.Context(), jti)
 			if err != nil || isBlacklisted {
-				httphelpers.RespondUnauthorized(c, "Token revogado ou erro de segurança.")
+				httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 				c.Abort()
 				return
 			}
@@ -119,7 +119,7 @@ func AuthMiddleware(
 
 		if tokenVersionChecker != nil {
 			if _, ok := claims["token_version"]; !ok {
-				httphelpers.RespondUnauthorized(c, "Missing token version")
+				httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 				c.Abort()
 				return
 			}
@@ -131,13 +131,13 @@ func AuthMiddleware(
 
 			currentVersion, err := tokenVersionChecker.GetUserTokenVersion(c.Request.Context(), userID)
 			if err != nil {
-				httphelpers.RespondUnauthorized(c, "Error verifying token version")
+				httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 				c.Abort()
 				return
 			}
 
 			if tokenVersionClaim < currentVersion {
-				httphelpers.RespondUnauthorized(c, "Token version mismatch (revoked)")
+				httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 				c.Abort()
 				return
 			}
@@ -185,7 +185,7 @@ func GetRawToken(c *gin.Context) (string, bool) {
 func RequireUserID(c *gin.Context) (string, bool) {
 	userIDStr, ok := GetUserID(c)
 	if !ok {
-		httphelpers.RespondUnauthorized(c, "Authentication context missing")
+		httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 		c.Abort()
 		return "", false
 	}
@@ -196,7 +196,7 @@ func RequireUserID(c *gin.Context) (string, bool) {
 func RequireRawToken(c *gin.Context) (string, bool) {
 	tokenStr, ok := GetRawToken(c)
 	if !ok {
-		httphelpers.RespondUnauthorized(c, "Authentication context missing")
+		httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 		c.Abort()
 		return "", false
 	}
@@ -234,7 +234,7 @@ func GetEstablishmentID(c *gin.Context) (string, bool) {
 func RequireEstablishmentID(c *gin.Context) (string, bool) {
 	estIDStr, ok := GetEstablishmentID(c)
 	if !ok {
-		httphelpers.RespondUnauthorized(c, "Establishment context missing")
+		httphelpers.RespondUnauthorized(c, "Escolha a unidade de novo para continuar.")
 		c.Abort()
 		return "", false
 	}
@@ -244,7 +244,7 @@ func RequireEstablishmentID(c *gin.Context) (string, bool) {
 func RequireUUIDParam(c *gin.Context, paramName string) (string, bool) {
 	value := c.Param(paramName)
 	if _, err := uuid.Parse(value); err != nil {
-		httphelpers.RespondParamError(c, paramName, "invalid UUID")
+		httphelpers.RespondParamError(c, paramName, "identificador inválido")
 		c.Abort()
 		return "", false
 	}
@@ -270,7 +270,7 @@ func RequireEstablishmentContext() gin.HandlerFunc {
 			return
 		}
 
-		httphelpers.RespondForbidden(c, "Cross-Tenant access denied")
+		httphelpers.RespondForbidden(c, "Você não tem permissão para fazer isso.")
 		c.Abort()
 	}
 }
@@ -315,14 +315,14 @@ func RequireRole(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, ok := c.Get("role")
 		if !ok {
-			httphelpers.RespondUnauthorized(c, "Authentication context missing")
+			httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 			c.Abort()
 			return
 		}
 
 		roleStr, ok := role.(string)
 		if !ok || roleStr == "" {
-			httphelpers.RespondUnauthorized(c, "Authentication context missing")
+			httphelpers.RespondUnauthorized(c, "Sua sessão expirou. Entre de novo.")
 			c.Abort()
 			return
 		}
@@ -334,7 +334,7 @@ func RequireRole(roles ...string) gin.HandlerFunc {
 			}
 		}
 
-		httphelpers.RespondForbidden(c, "Insufficient role")
+		httphelpers.RespondForbidden(c, "Você não tem permissão para fazer isso.")
 		c.Abort()
 	}
 }
@@ -360,7 +360,7 @@ func RequirePermission(permissions ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		granted, ok := GetPermissions(c)
 		if !ok {
-			httphelpers.RespondForbidden(c, "Insufficient permission")
+			httphelpers.RespondForbidden(c, "Você não tem permissão para fazer isso.")
 			c.Abort()
 			return
 		}
@@ -381,7 +381,7 @@ func RequirePermission(permissions ...string) gin.HandlerFunc {
 			}
 		}
 
-		httphelpers.RespondForbidden(c, "Insufficient permission")
+		httphelpers.RespondForbidden(c, "Você não tem permissão para fazer isso.")
 		c.Abort()
 	}
 }
