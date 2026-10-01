@@ -1,261 +1,214 @@
 # chameleon-common
 
-Biblioteca Go compartilhada pelos microsservicos do ecossistema Chameleon.
+Biblioteca Go compartilhada pelos microsserviços do ecossistema Chameleon. Guarda
+a **infraestrutura** que todo serviço precisa igual — autenticação de usuário e
+de serviço, servidor HTTP, respostas de erro, circuit breaker, transação,
+cache, métricas — para que cada serviço só escreva a própria regra de negócio.
 
-Ela existe para evitar duplicacao de infraestrutura entre APIs e manter um comportamento padrao em autenticacao, autenticacao service-to-service, contexto tenant, bootstrap HTTP, respostas HTTP e validacao.
+Não entra aqui: regra de negócio de um serviço, acesso a banco de um domínio,
+repositório concreto.
 
-## Quando usar
+## Sumário
 
-Use esta lib quando o microservico precisar de pelo menos um destes pontos:
+- [Pacotes](#pacotes)
+- [Pipeline de uma requisição autenticada](#pipeline-de-uma-requisição-autenticada)
+- [Autenticação de usuário](#autenticação-de-usuário)
+- [Token de serviço (chamada interna)](#token-de-serviço-chamada-interna)
+- [Circuit breaker](#circuit-breaker)
+- [Transação: UnitOfWork](#transação-unitofwork)
+- [Cache com invalidação por geração](#cache-com-invalidação-por-geração)
+- [Respostas e erros](#respostas-e-erros)
+- [Servidor HTTP e métricas](#servidor-http-e-métricas)
+- [Versionamento e release](#versionamento-e-release)
 
-- extrair e autorizar claims de um token de usuario (`typ=access`) no `gin.Context`
-- proteger rotas por role ou permissao
-- isolar rotas multi-tenant por `establishment_id`
-- autenticar chamadas service-to-service com token de servico assinado por RSA
-- montar o servidor HTTP padrao do servico (recovery, logging, security headers, swagger, health)
-- registrar chamada HTTP externa com circuit breaker
-- logger estruturado padronizado
-- responder com o formato HTTP padrao da plataforma
-- validar requests com mensagens consistentes
-- reutilizar modelo base para entidades GORM
+## Pacotes
 
-Em resumo: ela deve entrar quando o problema for infraestrutura compartilhada, nao regra de negocio.
+| pacote | o que entrega |
+|---|---|
+| `pkg/httpserver` | `*http.Server` padrão: recovery, request logger, limite de corpo, security headers, métricas, Swagger opcional e `/health` |
+| `pkg/middleware` | autenticação de usuário (RS256 + revogação), papel, permissão, contexto do estabelecimento, token de serviço, security headers |
+| `pkg/security` | assinatura e validação do token de serviço (RSA), carga de chaves PEM, verificador de revogação no Redis |
+| `pkg/circuitbreaker` | circuit breaker genérico para chamada HTTP síncrona |
+| `pkg/persistence` | `UnitOfWork`: transação em `domain`/`application` sem expor GORM |
+| `pkg/cache` | cache no Redis com chave versionada e invalidação explícita |
+| `pkg/redisclient` | cliente Redis a partir das variáveis padrão (`REDIS_*`) |
+| `pkg/metrics` | Prometheus: métricas HTTP, contadores/gauges, medição de jobs, servidor de métricas do worker |
+| `pkg/http` · `pkg/response` | respostas padrão (sucesso, paginação, erro) — mensagens em português |
+| `pkg/validation` | validação de payload, validadores BR (`br_document`, `br_phone`, `br_zip`) |
+| `pkg/money` | arredondamento e desconto (percentual ou valor fixo) — o vocabulário de desconto da plataforma |
+| `pkg/log` | logger `zerolog` padronizado (serviço, ambiente, nível) |
+| `pkg/base` | modelo e DTO base para entidades GORM (id, timestamps) |
 
-## Quando nao usar
+## Pipeline de uma requisição autenticada
 
-Esta lib nao deve:
-
-- conhecer regra de negocio de um servico especifico
-- acessar banco diretamente
-- depender de repositories concretos
-- resolver dependencias externas por conta propria
-
-## O que ela entrega
-
-Pacotes principais:
-
-- `pkg/middleware`: extracao/autorizacao de claims de usuario, token de servico (RSA), contexto tenant, security headers e logging de request
-- `pkg/security`: assinatura/validacao de token de servico via RSA, e interfaces para blacklist e versionamento de token de usuario
-- `pkg/httpserver`: bootstrap do `*http.Server` padrao (recovery, logger, security headers, swagger opcional, health)
-- `pkg/circuitbreaker`: circuit breaker generico para chamada HTTP sincrona entre servicos
-- `pkg/log`: logger `zerolog` padronizado (nome do servico, ambiente, nivel)
-- `pkg/http`: helpers para respostas HTTP em handlers Gin
-- `pkg/response`: estrutura padrao de sucesso, erro e paginacao
-- `pkg/validation`: validacao de payloads (inclusive documento/telefone/CEP BR) e traducao de erros
-- `pkg/base`: modelo base e DTO base para entidades GORM
-- `pkg/money`: aritmetica de dinheiro (arredondamento, desconto) e o vocabulario de desconto (`percent`/`amount`) da plataforma
-
-## Como usar
-
-Instalacao:
-
-```bash
-go get github.com/felipedenardo/chameleon-common
+```mermaid
+flowchart LR
+    req["requisição"] --> rec["recovery"] --> log["request logger"] --> body["limite de corpo"] --> sec["security headers"] --> met["métricas"]
+    met --> auth["AuthMiddleware<br/>RS256 + revogação"]
+    auth --> tenant["RequireEstablishmentContext<br/>establishment do token = da rota"]
+    tenant --> perm["RequirePermission / RequireRole"]
+    perm --> h["handler do serviço"]
 ```
 
-### Bootstrap do servidor HTTP
+Tudo até `métricas` vem do `httpserver.New`; os três de autorização o serviço
+monta nas próprias rotas.
 
-`httpserver.New` monta o `*http.Server` com o stack padrao (recovery, request logger, limite de corpo, security headers, swagger opcional e `/health`) — o servico so registra as proprias rotas via callback:
+## Autenticação de usuário
+
+`AuthMiddleware` **valida o token de verdade**: assinatura RS256 contra a chave
+pública do auth-api, expiração, `typ=access`, e a revogação no Redis. O Kong
+também valida na borda, mas não é a única barreira — confiar só no gateway
+amarraria a segurança à topologia de rede.
 
 ```go
-package main
+publicKey, _ := security.LoadRSAPublicKeyFile(cfg.UserTokenPublicKeyPath)
+redisClient, _ := redisclient.New(redisclient.FromEnv())
+revocation := security.NewRedisRevocationChecker(redisClient, "meu-servico")
 
-import (
-	"net/http"
+auth := middleware.AuthMiddleware(publicKey, revocation, revocation)
 
-	commonlog "github.com/felipedenardo/chameleon-common/pkg/log"
-	"github.com/felipedenardo/chameleon-common/pkg/httpserver"
-	"github.com/gin-gonic/gin"
-)
-
-func main() {
-	logger := commonlog.New("meu-servico", "development", "info")
-
-	srv := httpserver.New(logger, httpserver.Options{
-		ServiceName:  "meu-servico",
-		Port:         "8080",
-		BasePath:     "/meu-servico",
-		MaxBodyBytes: 1048576,
-		Swagger:      true,
-	}, func(api *gin.RouterGroup) {
-		api.GET("/ping", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"pong": true})
-		})
-	})
-
-	_ = srv.ListenAndServe()
-}
+tenant := api.Group("/:establishmentID", auth, middleware.RequireEstablishmentContext())
+tenant.GET("/stats", middleware.RequirePermission("dashboard.read"), handler)
 ```
 
-### Autenticacao de usuario
+- **Os três parâmetros são obrigatórios.** A função entra em pânico no boot se algum vier nil: autorização pela metade precisa ser impossível de montar. (Uma versão anterior aceitava nil, e seis serviços subiram sem revogação — deslogar não deslogava.)
+- **Revogação** (escrita pelo auth-api, lida aqui): blacklist do `jti` (logout de um dispositivo) e `token_version` do usuário (derruba todas as sessões). Se o Redis não responder, a requisição passa e a métrica `auth_revocation_check_degraded_total` sobe — cache fora custa segurança temporária, não disponibilidade, e a métrica é o alarme.
+- **`RequireEstablishmentContext`**: o `establishment_id` do token tem que ser o da rota; o admin da plataforma (`*` ou `platform.*`) atua em qualquer unidade.
+- **`RequirePermission`** aceita igualdade exata e curingas (`*`, `appointments.*`); `RequireRole` para perfil fixo (`owner`).
+- Leitura do contexto no handler: `middleware.RequireUserID(c)`, `RequireEstablishmentID(c)`, `RequireUUIDParam(c, "id")`.
 
-`AuthMiddleware` **extrai e autoriza** as claims de um token `typ=access` — ele **nao reverifica assinatura nem expiracao**: isso e responsabilidade do Kong (plugin `jwt`) na borda, a unica porta de entrada externa dos servicos. Essa premissa so e segura enquanto nenhum servico publica porta pro host alem do Kong.
+## Token de serviço (chamada interna)
+
+```mermaid
+sequenceDiagram
+    participant A as serviço chamador
+    participant B as serviço chamado
+    A->>A: SignServiceToken(chave PRIVADA de A, sub="chameleon-a-api")<br/>JWT RS256, typ=service, 2 min
+    A->>B: GET /internal/... Authorization: Bearer
+    B->>B: lê o sub SEM validar ainda
+    B->>B: sub está no mapa de confiança? (não = recusa)
+    B->>B: valida a assinatura com a chave PÚBLICA de A, e typ=service
+    B-->>A: resposta
+```
 
 ```go
-package main
+// quem chama
+token, _ := security.SignServiceToken(privateKey, "chameleon-meu-servico")
 
-import (
-	"context"
-
-	httphelpers "github.com/felipedenardo/chameleon-common/pkg/http"
-	"github.com/felipedenardo/chameleon-common/pkg/middleware"
-	"github.com/gin-gonic/gin"
-)
-
-type blacklistChecker struct{}
-
-func (blacklistChecker) IsTokenBlacklisted(ctx context.Context, jti string) (bool, error) {
-	return false, nil
-}
-
-type tokenVersionChecker struct{}
-
-func (tokenVersionChecker) GetUserTokenVersion(ctx context.Context, userID string) (int, error) {
-	return 1, nil
-}
-
-func main() {
-	r := gin.New()
-
-	auth := middleware.AuthMiddleware(blacklistChecker{}, tokenVersionChecker{})
-
-	api := r.Group("/api").Use(auth)
-
-	api.GET("/me", func(c *gin.Context) {
-		userID, _ := middleware.GetUserID(c)
-		httphelpers.RespondOK(c, gin.H{"user_id": userID})
-	})
-
-	tenant := api.Group("/:establishmentID").Use(
-		middleware.RequireEstablishmentContext(),
-	)
-
-	tenant.GET(
-		"/stats",
-		middleware.RequirePermission("dashboard.read"),
-		func(c *gin.Context) {
-			establishmentID, _ := middleware.GetEstablishmentID(c)
-			httphelpers.RespondOK(c, gin.H{"establishment_id": establishmentID})
-		},
-	)
-
-	_ = r.Run(":8080")
-}
+// quem recebe
+trusted := map[string]*rsa.PublicKey{"chameleon-outro-servico": outroPublicKey}
+internal := api.Group("/internal", middleware.ServiceTokenMiddleware(trusted))
 ```
 
-`blacklistTokenChecker`/`tokenVersionChecker` sao opcionais — passe `nil` se o servico nao precisar revogar sessao.
+Cada serviço tem o seu par de chaves (`make service-keys` no `chameleon-stack`).
+Um `sub` fora do mapa é recusado mesmo com assinatura válida contra outra chave;
+token de usuário nunca serve no lugar do de serviço (`typ` diferente).
 
-`RequireRole` e `RequirePermission`:
+## Circuit breaker
 
-- use `RequireRole` quando a rota depende de perfil fixo
-- use `RequirePermission` quando a protecao precisa ser mais granular
-- permissoes aceitam match exato e wildcards como `*` e `appointments.*`
-
-`RequireEstablishmentContext`:
-
-- usa em rotas como `/:establishmentID/...` — o parametro de rota **e sempre o id imutavel**
-- usuario comum so passa se o `establishment_id` do token bater com o da rota
-- platform admin (permissao `*` ou `platform.*`) atua sobre qualquer tenant indicado na rota
-
-### Autenticacao service-to-service
-
-Chamada HTTP sincrona entre servicos (nao iniciada por usuario) usa um token de servico curto, assinado com a chave **privada** RSA do servico chamador. Quem recebe valida contra a chave **publica** correspondente, mapeada por `sub` (subject) num allow-list — um `sub` fora do mapa e rejeitado mesmo com assinatura valida contra outra chave.
-
-Lado que chama:
-
-```go
-privateKey, err := security.LoadRSAPrivateKeyFile(cfg.ServicePrivateKeyPath)
-if err != nil {
-	// tratar erro
-}
-
-token, err := security.SignServiceToken(privateKey, "chameleon-meu-servico")
+```mermaid
+stateDiagram-v2
+    [*] --> fechado
+    fechado --> aberto: FailureThreshold falhas seguidas
+    aberto --> meio_aberto: depois de Timeout
+    meio_aberto --> fechado: a requisição de teste passa
+    meio_aberto --> aberto: a requisição de teste falha
 ```
-
-Lado que recebe (rota interna, nunca exposta pelo Kong):
-
-```go
-trustedKeys := map[string]*rsa.PublicKey{
-	"chameleon-outro-servico": outroServicoPublicKey,
-}
-
-internalGroup := api.Group("/internal", middleware.ServiceTokenMiddleware(trustedKeys))
-```
-
-### Circuit breaker
-
-Para chamada HTTP sincrona a outro servico ou dependencia externa:
 
 ```go
 cb := circuitbreaker.New(circuitbreaker.Settings{
-	Name:             "meu-servico-outro-servico",
-	MaxHalfOpenReqs:  1,
-	Interval:         60 * time.Second,
-	Timeout:          30 * time.Second,
-	FailureThreshold: 5,
+    Name: "sales-agenda", MaxHalfOpenReqs: 1,
+    Interval: 60 * time.Second, Timeout: 30 * time.Second, FailureThreshold: 5,
 })
+result, err := circuitbreaker.Execute(cb, func() (Result, error) { return call(ctx) })
+```
 
-result, err := circuitbreaker.Execute(cb, func() (Result, error) {
-	return doHTTPCall(ctx)
+Um breaker **por destino**: um serviço fora do ar não pode abrir o circuito de
+outro. Conte como falha só transporte e 5xx — 4xx é resposta legítima.
+
+## Transação: UnitOfWork
+
+`domain`/`application` nunca abrem transação GORM. Quem precisa gravar várias
+coisas juntas usa `persistence.UnitOfWork`, que injeta a transação no
+`context.Context`; o repositório pega a conexão certa com
+`persistence.DB(ctx, r.db)`:
+
+```go
+return s.uow.Execute(ctx, func(ctx context.Context) error {
+    if err := s.repo.Create(ctx, venda); err != nil {
+        return err
+    }
+    return s.outbox.Create(ctx, evento) // mesma transação
 })
 ```
 
-### Respostas HTTP e validacao
+Em teste, `persistence.NewNoopUnitOfWork()` roda a função direto, sem banco.
+
+## Cache com invalidação por geração
+
+`pkg/cache` guarda no Redis respostas caras de montar. Mora **no serviço dono do
+dado**: ele sabe quando o dado muda, então invalidar é uma chamada local no
+mesmo caminho da escrita.
 
 ```go
-type CreateUserRequest struct {
-	Email string `json:"email" validate:"required,email"`
-	Name  string `json:"name" validate:"required,min=3"`
-}
-
-func CreateUser(c *gin.Context) {
-	var req CreateUserRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httphelpers.RespondBindingError(c, err)
-		return
-	}
-
-	if errs := validation.ValidateRequest(req); errs != nil {
-		httphelpers.RespondValidation(c, errs)
-		return
-	}
-
-	httphelpers.RespondCreated(c, gin.H{"created": true})
-}
+key := cache.NewKey("establishment", "members").With(establishmentID)
+members, err := cache.Resolve(ctx, store, key, 5*time.Minute, func() ([]Member, error) {
+    return repo.ListMembers(ctx, establishmentID) // só roda no miss
+})
 ```
 
-`validation.SetupCustomValidator()` registra, no boot do servico, os validators BR (`br_document`, `br_phone`, `br_zip`) no engine de binding do Gin e ajusta o nome dos campos nas mensagens de erro para o `json` tag — chamar uma vez no bootstrap:
+- **Geração:** para invalidar um conjunto inteiro de chaves de uma vez, a chave carrega a geração do escopo (`Generation` / `NextGeneration`). Avançar a geração torna todas as chaves antigas inalcançáveis, sem varrer o Redis.
+- **Fora do caminho crítico:** o timeout da operação é curto, e estouro é tratado como ausência — o cache nunca atrasa a resposta.
+- Uso hoje: establishment-api.
+
+## Respostas e erros
+
+`pkg/http` monta o corpo padrão `{status, message, data, meta, errors}`.
+Todas as mensagens de erro são **frases em português prontas para a tela**,
+sem detalhe técnico:
+
+| helper | status | mensagem |
+|---|---|---|
+| `RespondInternalError` | 500 (ou 408/499 em timeout/cancelamento) | "Algo deu errado do nosso lado…" — o erro real vai para o log |
+| `RespondNotFound` | 404 | "Não encontrado." |
+| `RespondBindingError` | 400 | "Os dados enviados estão em um formato inválido." — o texto do parser JSON vai para o log, não para a resposta |
+| `RespondValidation` | 400 | "Confira os dados informados." + erros por campo, em português |
+| `RespondDomainFail` | 400 | a frase de domínio que o serviço escolheu |
+| middleware de auth | 401 / 403 | "Sua sessão expirou…" / "Você não tem permissão…" |
+
+A convenção de como cada serviço escolhe a frase de domínio está em
+`chameleon-stack/.claude/conventions/go-errors.md`.
+
+`validation.SetupCustomValidator()` registra os validadores BR no engine do Gin
+— chamar uma vez no bootstrap.
+
+## Servidor HTTP e métricas
 
 ```go
-func main() {
-	validation.SetupCustomValidator()
-	// ...
-}
+srv := httpserver.New(logger, httpserver.Options{
+    ServiceName: "meu-servico", Port: "8080", BasePath: "/meu-servico",
+    MaxBodyBytes: 1 << 20, Swagger: true,
+}, func(api *gin.RouterGroup) {
+    // rotas do serviço, já dentro de /meu-servico/api/v1
+})
 ```
 
-## Contratos esperados
+- `/meu-servico/api/v1/health` e, com `Swagger`, `/meu-servico/swagger/*`.
+- `/metrics` na raiz, fora do `BasePath` — o Prometheus raspa pela rede interna; o Kong não roteia.
+- Worker sem HTTP de negócio: `metrics.NewServer(port)` sobe só o `/metrics`. Laços periódicos medem cada rodada com `metrics.Observe("nome_do_job", fn)` e contam falhas parciais com `metrics.Failure`.
 
-Se o servico quiser revogar token de usuario ou validar versao, implementa as interfaces abaixo (ambas opcionais em `AuthMiddleware`):
+## Versionamento e release
 
-```go
-type BlacklistTokenChecker interface {
-	IsTokenBlacklisted(ctx context.Context, jti string) (bool, error)
-}
+SemVer por tag Git. Cada serviço fixa uma versão no `go.mod` — nunca a branch.
+O `go.work` do `chameleon-stack` liga o código local para desenvolvimento, mas
+o Docker não usa o workspace: **mudança aqui só chega aos serviços com tag
+publicada**.
 
-type TokenVersionChecker interface {
-	GetUserTokenVersion(ctx context.Context, userID string) (int, error)
-}
+```bash
+git tag -a v0.39.0 -m "..." && git push origin master v0.39.0
+# em cada serviço:
+GOPROXY=direct go get github.com/felipedenardo/chameleon-common@v0.39.0 && go mod tidy
 ```
 
-## Para quem evoluir a lib
-
-Mantenha a biblioteca pequena, previsivel e compartilhavel:
-
-- preserve compatibilidade sempre que possivel
-- prefira contratos pequenos e injetaveis
-- nao mova regra de negocio para ca
-- adicione apenas o que realmente fizer sentido para mais de um servico
-
-## Versionamento
-
-O projeto segue SemVer, via tags Git (`v0.30.0`, etc.) — cada microsservico consumidor pina uma versao especifica no `go.mod`, nunca a branch principal.
+`.github/workflows/ci.yml` roda lint, `govulncheck`, testes e build em todo pull
+request.
