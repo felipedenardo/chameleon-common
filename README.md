@@ -77,6 +77,24 @@ tenant.GET("/stats", middleware.RequirePermission("dashboard.read"), handler)
 - **`RequirePermission`** aceita igualdade exata e curingas (`*`, `appointments.*`); `RequireRole` para perfil fixo (`owner`).
 - Leitura do contexto no handler: `middleware.RequireUserID(c)`, `RequireEstablishmentID(c)`, `RequireUUIDParam(c, "id")`.
 
+### Plano do Chameleon: `RequireActivePlan` e `RequireModule`
+
+O auth-api põe no token de unidade a situação do plano (billing-api):
+`plan_status` (`ok`, `blocked`, `no_contract`) e `plan_modules`. O
+`AuthMiddleware` guarda os dois no contexto, e as guardas leem dali — **sem
+I/O**:
+
+```go
+tenant := api.Group("/:establishmentID", auth,
+    middleware.RequireEstablishmentContext(), middleware.RequireActivePlan())
+stock := tenant.Group("/products", middleware.RequireModule("inventory"))
+```
+
+- `RequireActivePlan`: `blocked` → **402** `{"code": "plan_blocked"}`; `no_contract` → **402** `plan_no_contract`. O cliente final lê "agenda indisponível", sem menção a cobrança.
+- `RequireModule(m)`: módulo fora do plano → **403** `module_not_in_plan`.
+- Passam sempre: admin da plataforma, token **sem** a situação (sem unidade, emitido com o billing fora do ar, ou de unidade que o billing não conhece) e situação desconhecida. Bloquear por falta de dado derrubaria quem paga.
+- O `code` é o que o web usa para mandar a pessoa a "Plano suspenso", "Escolha seu plano" ou "Não incluído no seu plano".
+
 ## Token de serviço (chamada interna)
 
 ```mermaid

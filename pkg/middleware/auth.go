@@ -100,6 +100,7 @@ func AuthMiddleware(
 		if permissions := extractPermissions(claims["permissions"]); len(permissions) > 0 {
 			c.Set(PermissionsKey, permissions)
 		}
+		setPlanClaims(c, claims)
 
 		jti, okJTI := claims["jti"].(string)
 		if !okJTI || strings.TrimSpace(jti) == "" {
