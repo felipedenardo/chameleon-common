@@ -15,6 +15,11 @@ import (
 // serviço), e é o que o lado que recebe usa pra escolher a chave pública
 // correspondente. Validado por middleware.ServiceTokenMiddleware.
 func SignServiceToken(privateKey *rsa.PrivateKey, subject string) (string, error) {
+	// Sem esta guarda o rsa entra em pânico com a chave nula, no meio da
+	// requisição, em vez de devolver erro para quem chama.
+	if privateKey == nil {
+		return "", fmt.Errorf("sign service token for %s: private key not loaded", subject)
+	}
 	now := time.Now()
 	claims := jwt.MapClaims{
 		"typ": "service",
