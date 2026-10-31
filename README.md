@@ -5,15 +5,29 @@ a **infraestrutura** que todo serviço precisa igual — autenticação de usuá
 de serviço, servidor HTTP, respostas de erro, circuit breaker, transação,
 cache, métricas — para que cada serviço só escreva a própria regra de negócio.
 
-Não entra aqui: regra de negócio de um serviço, acesso a banco de um domínio,
-repositório concreto.
+## O que entra aqui
+
+1. **Mecanismo usado igual por dois ou mais serviços**: como falar com outro
+   serviço, autenticar, gravar, ler fila, medir.
+2. **Nunca decisão de domínio**: preço, status de negócio, regra de um serviço,
+   texto de tela além das mensagens genéricas, acesso a banco de um domínio,
+   repositório concreto. Duas exceções conscientes: `pkg/money`, que existe
+   para o appointment e o sales calcularem exatamente o mesmo desconto, e o
+   plano no token (`RequireActivePlan`, `RequireModule`), que é contrato do
+   token como as permissões.
+3. **Cada pacote se sustenta sozinho e entra com teste.** Os de `pkg/messaging`
+   não são importados por nenhum outro pacote daqui: se um dia a parte de filas
+   virar um módulo próprio, ela sai sem arrastar o resto.
 
 ## Sumário
 
+- [O que entra aqui](#o-que-entra-aqui)
 - [Pacotes](#pacotes)
 - [Pipeline de uma requisição autenticada](#pipeline-de-uma-requisição-autenticada)
 - [Autenticação de usuário](#autenticação-de-usuário)
 - [Token de serviço (chamada interna)](#token-de-serviço-chamada-interna)
+- [Chamar outro serviço: servicecall](#chamar-outro-serviço-servicecall)
+- [Filas: consumidor, outbox e profundidade](#filas-consumidor-outbox-e-profundidade)
 - [Circuit breaker](#circuit-breaker)
 - [Transação: UnitOfWork](#transação-unitofwork)
 - [Cache com invalidação por geração](#cache-com-invalidação-por-geração)
@@ -28,6 +42,10 @@ repositório concreto.
 | `pkg/httpserver` | `*http.Server` padrão: recovery, request logger, limite de corpo, security headers, métricas, Swagger opcional e `/health` |
 | `pkg/middleware` | autenticação de usuário (RS256 + revogação), papel, permissão, contexto do estabelecimento, token de serviço, security headers |
 | `pkg/security` | assinatura e validação do token de serviço (RSA), carga de chaves PEM, verificador de revogação no Redis |
+| `pkg/servicecall` | chamada a outro serviço: assina o token de serviço, timeout, circuit breaker por destino, `ErrUnavailable` para "fora do ar" |
+| `pkg/messaging/consumer` | laço de leitura de uma fila SQS: espera longa, espera crescente na falha passageira, recusa permanente, confirmações em lote |
+| `pkg/messaging/outbox` | relay do outbox transacional: lê, envia em lote e marca publicados e recusados (`FAILED`), uma escrita por desfecho |
+| `pkg/messaging/queuedepth` | profundidade da fila e da DLQ para os alertas (`chameleon_sqs_messages`) |
 | `pkg/circuitbreaker` | circuit breaker genérico para chamada HTTP síncrona |
 | `pkg/persistence` | `UnitOfWork`: transação em `domain`/`application` sem expor GORM |
 | `pkg/cache` | cache no Redis com chave versionada e invalidação explícita |
@@ -121,6 +139,71 @@ internal := api.Group("/internal", middleware.ServiceTokenMiddleware(trusted))
 Cada serviço tem o seu par de chaves (`make service-keys` no `chameleon-stack`).
 Um `sub` fora do mapa é recusado mesmo com assinatura válida contra outra chave;
 token de usuário nunca serve no lugar do de serviço (`typ` diferente).
+
+## Chamar outro serviço: servicecall
+
+O lado de quem chama do token de serviço. Um `Caller` por destino, guardado no
+client de infra do serviço:
+
+```go
+caller := servicecall.New("inventory-api-products", "chameleon-purchase-api", baseURL, privateKey, 3*time.Second)
+
+status, body, err := caller.Do(ctx, http.MethodGet, "/api/v1/internal/"+id+"/products?product_ids=...", nil)
+switch {
+case errors.Is(err, servicecall.ErrUnavailable): // transporte, timeout, 5xx ou circuito aberto: tentar depois resolve
+case err != nil:                                  // quem chamou desistiu (contexto cancelado)
+case status != http.StatusOK:                     // 4xx: resposta do destino, quem chamou decide
+}
+products, err := servicecall.Decode[[]product](body) // lê o "data" do envelope
+```
+
+Só transporte e 5xx contam como falha para o circuit breaker; um 4xx volta como
+resposta e não abre o circuito. Quem traduz o status para as sentinelas da
+porta do domínio (recusa × fora do ar) é o client de infra de cada serviço.
+
+## Filas: consumidor, outbox e profundidade
+
+Nada aqui chama o banco ou a fila dentro de um laço.
+
+**Consumidor** (`pkg/messaging/consumer`). O serviço diz o que fazer com as
+mensagens; o pacote cuida do resto: espera longa de 20 s, espera crescente
+quando receber falha, métricas, e as confirmações em lote — uma chamada apaga
+as tratadas, outra adia as que falharam de passagem.
+
+```go
+// uma mensagem por vez, cada uma um fato na sua transação (uma venda, uma compra)
+c := consumer.NewSingle(client, consumer.Options{
+    Name: "sale_events_consumer", QueueURL: url, Enabled: cfg.SaleEventsEnabled(), VisibilityTimeout: 30,
+}, func(ctx context.Context, m types.Message) error {
+    event, err := parse(m)
+    if err != nil {
+        return consumer.Permanent(err) // mal formada: segue o tempo normal até a DLQ
+    }
+    return service.Apply(ctx, event)  // erro aqui adia a próxima entrega
+}, logger)
+
+// o lote inteiro de uma vez, quando o tratamento aceita lote (uma transação)
+c := consumer.New(client, consumer.Options{Name: "notifications_consumer", MaxMessages: 10, ...}, handleBatch, logger)
+```
+
+Na falha passageira a mensagem fica escondida 30 s, 1 min, 2 min, 4 min, 8 min
+e depois 15 min a cada entrega: com 5 entregas, uns 15 minutos de dependência
+fora antes da DLQ; com 10, perto de 1h30. A recusa marcada com `Permanent` não
+espera.
+
+**Outbox** (`pkg/messaging/outbox`). O serviço implementa o `Store` do seu
+outbox (leitura dos pendentes e as marcações, todas em lote); o relay lê até 10
+eventos, envia num `SendMessageBatch` e grava os desfechos — publicados,
+recusados e a tentar de novo —, uma escrita cada. O evento que a fila recusa de
+vez (corpo acima de 256 KiB, ou entrada recusada com `SenderFault`) vira
+`FAILED` e sai do caminho dos outros; fila fora conta mais uma tentativa e o
+relay espera antes da próxima passada. Métricas: `chameleon_outbox_pending_events`
+e `chameleon_outbox_failed_events`, rotuladas por `stream` quando o serviço
+publica em mais de uma fila.
+
+**Profundidade** (`pkg/messaging/queuedepth`). Lê a fila e a DLQ (descoberta
+pelo `RedrivePolicy`) a cada 30 s e alimenta `chameleon_sqs_messages{queue,state}`,
+que os alertas de fila parada e de mensagem na DLQ usam.
 
 ## Circuit breaker
 
@@ -223,9 +306,9 @@ o Docker não usa o workspace: **mudança aqui só chega aos serviços com tag
 publicada**.
 
 ```bash
-git tag -a v0.39.0 -m "..." && git push origin master v0.39.0
+git tag -a v0.41.0 -m "..." && git push origin master v0.41.0
 # em cada serviço:
-GOPROXY=direct go get github.com/felipedenardo/chameleon-common@v0.39.0 && go mod tidy
+GOPROXY=direct go get github.com/felipedenardo/chameleon-common@v0.41.0 && go mod tidy
 ```
 
 `.github/workflows/ci.yml` roda lint, `govulncheck`, testes e build em todo pull
