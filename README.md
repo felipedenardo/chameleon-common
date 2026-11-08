@@ -40,7 +40,7 @@ cache, métricas — para que cada serviço só escreva a própria regra de neg�
 | pacote | o que entrega |
 |---|---|
 | `pkg/httpserver` | `*http.Server` padrão: recovery, request logger, limite de corpo, security headers, métricas, Swagger opcional e `/health` |
-| `pkg/middleware` | autenticação de usuário (RS256 + revogação), papel, permissão, contexto do estabelecimento, token de serviço, security headers |
+| `pkg/middleware` | autenticação de usuário (RS256 + revogação), papel, permissão, contexto do estabelecimento, cadastro de cliente da sessão, token de serviço, security headers |
 | `pkg/security` | assinatura e validação do token de serviço (RSA), carga de chaves PEM, verificador de revogação no Redis |
 | `pkg/servicecall` | chamada a outro serviço: assina o token de serviço, timeout, circuit breaker por destino, `ErrUnavailable` para "fora do ar" |
 | `pkg/messaging/consumer` | laço de leitura de uma fila SQS: espera longa, espera crescente na falha passageira, recusa permanente, confirmações em lote |
@@ -93,7 +93,7 @@ tenant.GET("/stats", middleware.RequirePermission("dashboard.read"), handler)
 - **Revogação** (escrita pelo auth-api, lida aqui): blacklist do `jti` (logout de um dispositivo) e `token_version` do usuário (derruba todas as sessões). Se o Redis não responder, a requisição passa e a métrica `auth_revocation_check_degraded_total` sobe — cache fora custa segurança temporária, não disponibilidade, e a métrica é o alarme.
 - **`RequireEstablishmentContext`**: o `establishment_id` do token tem que ser o da rota; o admin da plataforma (`*` ou `platform.*`) atua em qualquer unidade.
 - **`RequirePermission`** aceita igualdade exata e curingas (`*`, `appointments.*`); `RequireRole` para perfil fixo (`owner`).
-- Leitura do contexto no handler: `middleware.RequireUserID(c)`, `RequireEstablishmentID(c)`, `RequireUUIDParam(c, "id")`.
+- Leitura do contexto no handler: `middleware.RequireUserID(c)` (o login: quem age, o profissional), `RequireCustomerID(c)` (o cliente das rotas "meus agendamentos", "minha assinatura": o cadastro dele na barbearia, claim `customer_id`; sem o claim, vale o `sub`), `RequireEstablishmentID(c)`, `RequireUUIDParam(c, "id")`.
 
 ### Plano do Chameleon: `RequireActivePlan` e `RequireModule`
 

@@ -101,6 +101,7 @@ func AuthMiddleware(
 			c.Set(PermissionsKey, permissions)
 		}
 		setPlanClaims(c, claims)
+		setCustomerClaim(c, claims)
 
 		jti, okJTI := claims["jti"].(string)
 		if !okJTI || strings.TrimSpace(jti) == "" {
