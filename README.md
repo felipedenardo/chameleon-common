@@ -48,6 +48,7 @@ cache, métricas — para que cada serviço só escreva a própria regra de neg�
 | `pkg/messaging/queuedepth` | profundidade da fila e da DLQ para os alertas (`chameleon_sqs_messages`) |
 | `pkg/circuitbreaker` | circuit breaker genérico para chamada HTTP síncrona |
 | `pkg/persistence` | `UnitOfWork`: transação em `domain`/`application` sem expor GORM |
+| `pkg/calendar` | aritmética de calendário: somar meses caindo no mesmo dia (sem transbordar fevereiro); quem decide o dia do ciclo é o serviço dono |
 | `pkg/cache` | cache no Redis com chave versionada e invalidação explícita |
 | `pkg/redisclient` | cliente Redis a partir das variáveis padrão (`REDIS_*`) |
 | `pkg/metrics` | Prometheus: métricas HTTP, contadores/gauges, medição de jobs, servidor de métricas do worker |
